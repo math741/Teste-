@@ -439,24 +439,35 @@ class Simulator:
         args = (U, st.Uprev, st.H, Ud, N, st.R, link_sum, gb.W, gb.m0, gb.m1, gb.m2, gb.g_mu, gb.g_sig, gb.g_bias,
                 gb.g_gain, gb.diff, gb.diss, gb.Q, gb.vy, gb.vx, gb.rate, gb.delay_w, gb.hyst_w, gb.link_coup, gb.res_on,
                 gb.res_khalf, K)
+        # torch.compile só é usado no tamanho fixo do batch de triagem (formas estáticas, sem recompilações
+        # a cada probe); os probes, de tamanhos variados, usam o modo eager.
+        compiled = self._physics is not self._physics_eager
+        fn = self._physics if (compiled and B == self.cfg.batch_size) else self._physics_eager
         try:
             with ctx:
-                dU, gpos = self._physics(*args)
+                dU, gpos = fn(*args)
         except Exception as e:
-            if self._physics is self._physics_eager or is_oom_error(e):
+            if fn is self._physics_eager or is_oom_error(e):
                 raise
             print(f"[sim] torch.compile falhou em execução ({type(e).__name__}); voltando ao modo eager")
             self._physics = self._physics_eager
             with ctx:
-                dU, gpos = self._physics(*args)
+                dU, gpos = self._physics_eager(*args)
         dU = dU.float(); gpos = gpos.float()
-        noise_amp = gb.noise * gb.rate.mean(1, keepdim=True).sqrt() + st.ext_noise
-        if gb.has_noise or bool((st.ext_noise > 0).any()):
+        # flags calculadas uma vez por tensor (evita sincronizar GPU->CPU a cada passo)
+        if getattr(st, "_ext_src", None) is not st.ext_noise:
+            st._ext_src, st._ext_any = st.ext_noise, bool((st.ext_noise > 0).any())
+        if getattr(st, "_shock_src", None) is not st.shock_period:
+            st._shock_src, st._shock_np = st.shock_period, st.shock_period.cpu().numpy()
+        if gb.has_noise or st._ext_any:
+            noise_amp = gb.noise * gb.rate.mean(1, keepdim=True).sqrt() + st.ext_noise
             dU = dU + noise_amp * self._grand(st, (C, S, S))
         # choque ambiental periódico (perturbação externa do ambiente)
-        if bool((st.shock_period > 0).any()):
-            hit = ((st.shock_period > 0) & ((st.t + 1) % st.shock_period.clamp(min=1) == 0)).view(B, 1, 1, 1).float()
-            if bool(hit.any()):
+        sp = st._shock_np
+        if (sp > 0).any():
+            hit_np = (sp > 0) & ((st.t + 1) % np.maximum(sp, 1) == 0)
+            if hit_np.any():
+                hit = torch.as_tensor(hit_np, device=self.device, dtype=torch.float32).view(B, 1, 1, 1)
                 dU = dU + hit * st.shock_amp * self._grand(st, (C, S, S))
         # dt adaptativo (salvaguarda numérica externa)
         amax = dU.abs().amax(dim=(1, 2, 3), keepdim=True)
@@ -473,9 +484,8 @@ class Simulator:
         Unew = gb.sat * torch.tanh(Unew / gb.sat)
         Unew = Unew * gb.chm
         bad = ~torch.isfinite(Unew).flatten(1).all(1)
-        if bool(bad.any()):
-            st.bad = st.bad | bad
-            Unew = torch.where(bad.view(B, 1, 1, 1), torch.zeros_like(Unew), Unew)
+        st.bad = st.bad | bad
+        Unew = torch.where(bad.view(B, 1, 1, 1), torch.zeros_like(Unew), Unew)
         Unew = torch.nan_to_num(Unew, nan=0.0, posinf=0.0, neginf=0.0).clamp(-self.cfg.state_bound, self.cfg.state_bound)
         # traço lento (histerese)
         if gb.has_hyst:

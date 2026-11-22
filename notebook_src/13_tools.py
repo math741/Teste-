@@ -106,9 +106,16 @@ def reproduce_discovery(discovery_id: str, lab=None, deterministic: bool = True)
     same_status = res.status == rec["status"]
     a, b = res.score, rec["score"]
     same_score = (not np.isfinite(a) and not np.isfinite(b)) or (np.isfinite(a) and np.isfinite(b) and abs(a - b) < 1e-3)
+    dev_now = lab.ve.sim.device.type
+    dev_orig = prot.get("device", dev_now)
     out = {"discovery_id": discovery_id, "probe": probe, "original_status": rec["status"], "reproduced_status": res.status,
            "original_score": b, "reproduced_score": a, "status_match": same_status, "score_match": bool(same_score),
-           "genome_hash_match": g.hash() == prot.get("genome_hash"), "engine": res.version}
+           "genome_hash_match": g.hash() == prot.get("genome_hash"), "engine": res.version,
+           "device_original": dev_orig, "device_now": dev_now}
+    if dev_orig != dev_now:
+        out["note"] = ("dispositivos diferentes: a física determinística é a mesma (dentro da tolerância de float32), mas os "
+                       "fluxos aleatórios (ruído intrínseco, assincronia, choques) de CPU e CUDA diferem — espera-se "
+                       "concordância estatística (mesmo status), não números idênticos")
     print(json.dumps(to_jsonable(out), indent=1))
     return out
 

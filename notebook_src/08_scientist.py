@@ -90,6 +90,8 @@ class GenesisScientist:
         self.cache: Dict[str, str] = {}            # (genome_hash|probe|version|args) -> result_id
         self.stats: Dict[str, Dict[str, float]] = {}
         self.failed_behaviors: Dict[str, List[np.ndarray]] = {}
+        self.queued: set = set()                   # chaves já na fila (deduplicação O(1))
+        self._fail_cache: Dict[str, Tuple[int, np.ndarray, Any]] = {}
         self.advisor: Optional[Callable] = None
 
     @staticmethod
@@ -130,12 +132,15 @@ class GenesisScientist:
         return (gain * (0.25 + p * (1 - p)) * depth + bonus) / (1.0 + self.cost(probe))
 
     def similar_to_failure(self, probe: str, vec: Optional[np.ndarray]) -> bool:
-        if vec is None:
+        lst = self.failed_behaviors.get(probe)
+        if vec is None or not lst:
             return False
-        for v in self.failed_behaviors.get(probe, [])[-500:]:
-            if float(np.sqrt(np.mean((v - vec) ** 2))) < 0.015:
-                return True
-        return False
+        ent = self._fail_cache.get(probe)
+        if ent is None or ent[0] != len(lst) or ent[2] is not lst[-1]:
+            ent = (len(lst), np.asarray(lst[-500:], np.float32), lst[-1])
+            self._fail_cache[probe] = ent
+        d = np.sqrt(np.mean((ent[1] - np.asarray(vec, np.float32)[None]) ** 2, axis=1))
+        return bool((d < 0.015).any())
 
     def propose(self, cid: str, d: Dict[str, float], status: Dict[str, str], level: int, anomalous: bool, gen: int,
                 vec: Optional[np.ndarray] = None, is_top: bool = False) -> List[Experiment]:
@@ -145,7 +150,7 @@ class GenesisScientist:
 
         def want(probe, reason, extra=0.0, **kw):
             k = self.key(cid, probe, kw)
-            if k in self.done or any(e.candidate_id == cid and e.probe == probe and e.kwargs == kw for e in self.queue):
+            if k in self.done or k in self.queued or any(self.key(e.candidate_id, e.probe, e.kwargs) == k for e in out):
                 return
             if probe in PROBE_LEVEL and not anomalous and self.similar_to_failure(probe, vec):
                 return
@@ -209,11 +214,19 @@ class GenesisScientist:
     def _eff(self, e: Experiment, gen: int) -> float:
         return e.priority * (1 + 0.15 * max(0, gen - e.created_gen))      # envelhecimento: sem inanição
 
+    def _rebuild_queued(self):
+        self.queued = {self.key(e.candidate_id, e.probe, e.kwargs) for e in self.queue}
+
     def push(self, exps: List[Experiment], gen: int = 0):
-        self.queue.extend(exps)
+        for e in exps:
+            k = self.key(e.candidate_id, e.probe, e.kwargs)
+            if k in self.queued or k in self.done:
+                continue
+            self.queue.append(e); self.queued.add(k)
         self.queue.sort(key=lambda e: -self._eff(e, gen))
         if len(self.queue) > 2000:
             self.queue = self.queue[:2000]
+            self._rebuild_queued()
 
     def pop(self, gen: Optional[int] = None) -> Optional[Experiment]:
         """Balanço exploração/exploração: 1 em cada 3 experimentos vai para triagem ampla (exploração),
@@ -231,8 +244,10 @@ class GenesisScientist:
             if self.key(e.candidate_id, e.probe, e.kwargs) in self.done:
                 continue
             self.queue.pop(i)
+            self.queued.discard(self.key(e.candidate_id, e.probe, e.kwargs))
             return e
         self.queue = [e for e in self.queue if self.key(e.candidate_id, e.probe, e.kwargs) not in self.done]
+        self._rebuild_queued()
         return None
 
     def record(self, e: Experiment, result_id: str, status: str, duration: float, vec: Optional[np.ndarray]):
@@ -245,6 +260,7 @@ class GenesisScientist:
 
     def drop_candidates(self, alive: set):
         self.queue = [e for e in self.queue if e.candidate_id in alive]
+        self._rebuild_queued()
 
     def state_dict(self):
         return {"queue": [asdict(e) for e in self.queue], "done": self.done, "cache": self.cache, "stats": self.stats,
@@ -254,3 +270,5 @@ class GenesisScientist:
         self.queue = [Experiment(**e) for e in s["queue"]]
         self.done, self.cache, self.stats = dict(s["done"]), dict(s["cache"]), dict(s["stats"])
         self.failed_behaviors = {k: [np.asarray(x) for x in v] for k, v in s["failed_behaviors"].items()}
+        self._fail_cache = {}
+        self._rebuild_queued()

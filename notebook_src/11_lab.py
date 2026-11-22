@@ -324,8 +324,8 @@ class GenesisLab:
             if target is None or f"replication_{target}" in st:
                 continue
             kw = {"target": target, "n_seeds": self.cfg.probe.replication_seeds}
-            if self.scientist.key(cid, "replication", kw) in self.scientist.done or any(
-                    e.candidate_id == cid and e.probe == "replication" and e.kwargs == kw for e in self.scientist.queue):
+            k_ = self.scientist.key(cid, "replication", kw)
+            if k_ in self.scientist.done or k_ in self.scientist.queued:
                 continue
             exps.append(Experiment(cid, "replication", kw, 100.0 + self.levels[cid],
                                    f"descoberta L{self.levels[cid]} -> replicação independente obrigatória", gen))

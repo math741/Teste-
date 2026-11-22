@@ -90,7 +90,8 @@ class ValidationEngine:
         fn = getattr(self, f"probe_{name}")
         protocol = {"probe": name, "probe_version": self.PROBE_VERSIONS.get(name, "?"), "engine": self.VERSION,
                     "seed": int(seed), "kwargs": to_jsonable(kw), "world_size": kw.get("S", self.cfg.world_size),
-                    "curriculum": dict(self.curriculum), "genome_hash": genome.hash()}
+                    "curriculum": dict(self.curriculum), "genome_hash": genome.hash(),
+                    "device": self.sim.device.type}
         try:
             res: TestResult = fn(genome, seed, **kw)
         except Exception as e:

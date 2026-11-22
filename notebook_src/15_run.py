@@ -83,7 +83,7 @@ def autotune(cfg: GenesisConfig, hw: Dict[str, Any], device: torch.device) -> Di
             gl = (proto * (Bt // len(proto) + 1))[:Bt]
             res = {}
             for comp in [False, True]:
-                c2 = copy.deepcopy(cfg); c2.use_compile = comp
+                c2 = copy.deepcopy(cfg); c2.use_compile = comp; c2.batch_size = Bt   # compile só vale no batch de triagem
                 s2 = Simulator(c2, device); gb = s2.prepare(gl)
                 st = s2.init_state(gb, [env] * Bt, list(range(Bt)), run_seed=1)
                 s2.run(gb, st, 3); _sync(); t0 = time.time()
@@ -128,7 +128,9 @@ HW = detect_hardware()
 DEVICE = torch.device(HW["device"])
 if DEVICE.type == "cuda":
     torch.backends.cudnn.benchmark = True
-    torch.backends.cuda.matmul.allow_tf32 = False      # dinâmica numérica em FP32 real
+    torch.backends.cuda.matmul.allow_tf32 = False      # dinâmica numérica em FP32 real (sem TF32 em Ampere+)
+    torch.backends.cudnn.allow_tf32 = False
+    torch.set_float32_matmul_precision("highest")
 CFG = profile_config(PROFILE, HW, MASTER_SEED, MAX_SESSION_HOURS, MAX_GENERATIONS_THIS_SESSION)
 print(f"armazenamento: {PATHS.root} ({'Google Drive' if PATHS.on_drive else 'local — NÃO sobrevive à perda da sessão do Colab'})")
 print(f"hardware: {HW['gpu_name']} | VRAM {human_bytes(HW['vram_total'])} | CPU x{HW['cpu_count']} | torch {HW['torch']} CUDA {HW['cuda_version']}")

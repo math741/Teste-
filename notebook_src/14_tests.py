@@ -247,16 +247,36 @@ class BootSuite:
             assert out["status_match"] and out["score_match"] and out["genome_hash_match"], f"reprodução divergiu: {out}"
 
         def test_device_consistency():
+            """A física determinística deve coincidir entre CPU e CUDA (tolerância de float32).
+            Os geradores aleatórios de CPU e CUDA produzem sequências DIFERENTES para a mesma semente, então ruído
+            intrínseco, assincronia e choques ficam desligados aqui (eles são reprodutíveis apenas no mesmo tipo de
+            dispositivo). Leis aleatórias são comparadas em 1 passo (caos amplificaria arredondamentos legítimos);
+            leis conhecidas e estáveis, em 30 passos."""
             if not torch.cuda.is_available():
                 return "sem GPU — pulado (CPU apenas)"
-            g = Genome(space.random_params(np.random.default_rng(3)))
-            outs = []
-            for dev in [torch.device("cpu"), torch.device("cuda")]:
-                s_ = Simulator(cfg, dev); gb = s_.prepare([g])
-                st = s_.run(gb, s_.init_state(gb, [envs[0]], [5]), 20); outs.append(st.U.cpu())
-            err = float((outs[0] - outs[1]).abs().max())
-            assert err < 1e-2, f"CPU vs CUDA divergiram ({err})"
-            return f"max|Δ|={err:.1e}"
+            r_ = np.random.default_rng(3)
+            gs = []
+            for i in range(6):
+                g = Genome(space.random_params(r_))
+                g.params["noise"] = np.array(0.0, np.float32)
+                g.params["async_p"] = np.array(1.0, np.float32)
+                g.params["boundary"] = np.array(i % len(BOUNDARIES), np.int64)
+                gs.append(g)
+            quiet = dc_replace(envs[0], ext_noise=0.0, shock_period=0, shock_amp=0.0)
+
+            def run(dev, genomes, steps):
+                s_ = Simulator(cfg, dev); gb = s_.prepare(genomes)
+                st = s_.init_state(gb, [quiet] * len(genomes), list(range(len(genomes))), run_seed=1)
+                return s_.run(gb, st, steps).U.cpu()
+
+            def rel_err(a, b):
+                return float(((a - b).abs().flatten(1).amax(1) / (a.abs().flatten(1).amax(1) + 1e-6)).max())
+            e1 = rel_err(run(torch.device("cpu"), gs, 1), run(torch.device("cuda"), gs, 1))
+            ctl = [control_genome(space, k, D, cfg.world_size) for k in ["diffusion", "reaction_diffusion", "link_copy"]]
+            e30 = rel_err(run(torch.device("cpu"), ctl, 30), run(torch.device("cuda"), ctl, 30))
+            assert e1 < 1e-3, f"1 passo, leis aleatórias sem ruído: CPU vs CUDA erro relativo {e1:.2e}"
+            assert e30 < 1e-3, f"30 passos, leis de controle: CPU vs CUDA erro relativo {e30:.2e}"
+            return f"rel.err 1 passo={e1:.1e}, 30 passos (controles)={e30:.1e}; ruído: fluxo por dispositivo"
 
         for name, fn in [("test_state_initialization", test_state_initialization), ("test_simulation_kernel", test_simulation_kernel),
                          ("test_dynamics_shape", test_dynamics_shape), ("test_no_nan", test_no_nan),
@@ -279,8 +299,7 @@ class BootSuite:
 
 
 def run_boot_tests(device: torch.device, root: str) -> BootSuite:
-    test_root = os.path.join(root, "_boot_tests")
-    shutil.rmtree(test_root, ignore_errors=True)
+    test_root = tempfile.mkdtemp(prefix="genesis_boot_")       # disco local (rápido; não suja o Drive)
     suite = BootSuite(device, test_root)
     t0 = time.time()
     ok = suite.all()

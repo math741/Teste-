@@ -252,9 +252,15 @@ class Screener:
                 frames.append(pool(st.U[:n]).float())
                 dms.append(pool((st.U[:n] - st.U[n:]).abs().sum(1, keepdim=True)).squeeze(1))
         Fr = torch.stack(frames); Dm = torch.stack(dms)
-        chm = gb.chm[:n].view(n, -1); sat = gb.sat[:n].view(n, -1)
-        desc = compute_descriptors(Fr, Dm, D0, chm, sat, S, cfg.record_every, rest)
+        del frames, dms
+        chm = gb.chm[:n].view(n, -1).clone(); sat = gb.sat[:n].view(n, -1).clone()
         bad = (st.bad[:n] | st.bad[n:]).cpu().numpy()
+        del st, gb                                   # libera o estado do batch antes da análise
+        parts = []
+        for a in range(0, n, 256):                   # descritores em sub-lotes: memória limitada mesmo com batch grande
+            b = min(n, a + 256)
+            parts.append(compute_descriptors(Fr[:, a:b], Dm[:, a:b], D0[a:b], chm[a:b], sat[a:b], S, cfg.record_every, rest))
+        desc = {k: np.concatenate([p_[k] for p_ in parts]) for k in parts[0]}
         out = []
         for i in range(n):
             row = {k: float(v[i]) for k, v in desc.items()}
