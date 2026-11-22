@@ -1,0 +1,4 @@
+genesis_runs/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
