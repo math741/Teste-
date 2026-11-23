@@ -5,6 +5,8 @@
 # %%
 import sys, time, json, math, uuid, zlib, gzip, shutil, pickle, hashlib, random, platform
 import traceback, warnings, copy, heapq, itertools, io, csv, glob, datetime, subprocess, contextlib, tempfile
+import base64, collections
+import html as _html
 from dataclasses import dataclass, field, asdict, fields as dc_fields, replace as dc_replace
 from typing import Any, Dict, List, Optional, Tuple, Sequence, Callable
 
@@ -27,7 +29,7 @@ if not IN_NOTEBOOK:
 import matplotlib.pyplot as plt
 
 try:
-    from IPython.display import display, clear_output, Markdown, Image as IPImage
+    from IPython.display import display, clear_output, Markdown, HTML, Image as IPImage
 except Exception:  # execução como script
     def display(*a, **k):
         for x in a:
@@ -35,6 +37,7 @@ except Exception:  # execução como script
     def clear_output(*a, **k):
         return None
     Markdown = str
+    HTML = str
     IPImage = None
 
 try:
@@ -68,6 +71,22 @@ GENESIS_CHANGELOG = [
 
 STATUS_NOT_TESTED, STATUS_RUNNING, STATUS_PASS, STATUS_FAIL, STATUS_INCONCLUSIVE, STATUS_ERROR = (
     "NOT_TESTED", "RUNNING", "PASS", "FAIL", "INCONCLUSIVE", "ERROR")
+
+
+class _LiveHook:
+    """Ponto de acoplamento opcional do painel ao vivo (módulo 12b). Somente observação: o painel lê o estado,
+    nunca participa da seleção, do fitness ou dos testes."""
+    monitor = None
+
+
+LIVE = _LiveHook()
+
+
+def live_progress(phase: Optional[str] = None, done: Optional[float] = None, total: Optional[float] = None,
+                  detail: Optional[str] = None):
+    m = LIVE.monitor
+    if m is not None:
+        m.progress(phase, done, total, detail)
 
 
 # ----------------------------------------------------------------------------

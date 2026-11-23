@@ -107,6 +107,7 @@ class GenesisConfig:
     max_session_hours: float = 11.0
     checkpoint_every_minutes: float = 10.0
     dashboard_every_seconds: float = 30.0
+    live_interval: float = 1.0
     max_generations_session: int = 0
     experiment_time_fraction: float = 0.35
     max_experiments_per_generation: int = 6
@@ -199,6 +200,7 @@ def profile_config(profile: str, hw: Dict[str, Any], master_seed: int, max_hours
         cfg.population_size, cfg.batch_size = 96, 256
         cfg.screen_steps, cfg.screen_burn_in, cfg.record_every, cfg.metric_res = 160, 48, 6, 24
         cfg.checkpoint_every_minutes = 5.0
+        cfg.dashboard_every_seconds = 15.0
         pr.trials, pr.permutations = 8, 60
         pr.memory_delays, pr.channel_distance = [1, 10, 100], 12
         pr.replication_seeds, pr.critical_seeds = 6, 12
@@ -206,11 +208,13 @@ def profile_config(profile: str, hw: Dict[str, Any], master_seed: int, max_hours
         cfg.world_size = 64
         cfg.population_size, cfg.batch_size = 256, 512
         cfg.screen_steps, cfg.screen_burn_in = 224, 64
+        cfg.checkpoint_every_minutes = 5.0
         pr.memory_delays = [1, 10, 100, 1000]
     elif profile == "EXTREME":
         cfg.world_size = 96 if hw.get("vram_total", 0) >= 20e9 else 64
         cfg.population_size, cfg.batch_size = 512, 1024
         cfg.screen_steps, cfg.screen_burn_in = 288, 96
+        cfg.checkpoint_every_minutes = 5.0
         pr.memory_delays = [1, 10, 100, 1000, 10000]
         pr.trials, pr.permutations = 12, 200
         pr.critical_seeds = 30

@@ -63,7 +63,7 @@ def write_evidence_bundle(lab: "GenesisLab", rec: Dict[str, Any]) -> str:
 def write_champion_outputs(lab: "GenesisLab", cid: str, battery: Dict[str, TestResult], entry: Dict[str, Any]):
     d = lab.paths.champion
     g = lab.store[cid]
-    print("\n╔══════════════════════════════════════╗\n║       GENESIS CHAMPION DETECTED      ║\n╚══════════════════════════════════════╝")
+    lab.say("╔══════════════════════════════════════╗\n║       GENESIS CHAMPION DETECTED      ║\n╚══════════════════════════════════════╝")
     torch.save({"genome": genome_to_record(lab.space, g), "config": lab.cfg.to_dict(), "entry": entry,
                 "version": GENESIS_VERSION}, os.path.join(d, "GENESIS_CHAMPION.pt"))
     with open(os.path.join(d, "GENESIS_CHAMPION_EXPERIMENTS.json"), "w") as f:

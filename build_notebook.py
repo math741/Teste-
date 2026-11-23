@@ -20,10 +20,29 @@ def cells_from(path):
     return out
 
 
+def add_colab_titles(cells):
+    """No Colab, '# @title ... { display-mode: "form" }' esconde o código e mostra só o título (notebook limpo:
+    duplo clique no título mostra o código). Fora do Colab é apenas um comentário."""
+    title, count = "Genesis", {}
+    for c in cells:
+        if c["cell_type"] == "markdown":
+            for line in c["source"].splitlines():
+                if line.startswith("#"):
+                    title = line.lstrip("#").strip().replace("`", "").replace("{", "(").replace("}", ")")
+                    break
+            continue
+        if c["source"].lstrip().startswith("# @title"):
+            continue
+        count[title] = count.get(title, 0) + 1
+        name = title if count[title] == 1 else f"{title} (parte {count[title]})"
+        c["source"] = f'# @title {name} {{ display-mode: "form" }}\n' + c["source"]
+
+
 def build(out_path):
     cells = []
     for f in sorted(glob.glob(os.path.join(HERE, "notebook_src", "*.py"))):
         cells.extend(cells_from(f))
+    add_colab_titles(cells)
     for i, c in enumerate(cells):
         c["id"] = f"genesis-{i:03d}"
         src = c["source"]

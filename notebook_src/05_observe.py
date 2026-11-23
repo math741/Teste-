@@ -192,7 +192,8 @@ class Screener:
 
     def screen(self, genomes: List[Genome], envs: List[Environment], seed_base: int,
                steps: Optional[int] = None, S: Optional[int] = None, n_envs: Optional[int] = None,
-               hook: Optional[Callable] = None, env_choice_seed: Optional[int] = None) -> List[Dict[str, Any]]:
+               hook: Optional[Callable] = None, env_choice_seed: Optional[int] = None,
+               label: Optional[str] = None) -> List[Dict[str, Any]]:
         cfg = self.cfg
         steps = steps or cfg.screen_steps
         S = S or cfg.world_size
@@ -205,8 +206,15 @@ class Screener:
                 jobs.append((gi, envs[int(ei)], derive_seed(seed_base, g.genome_id, envs[int(ei)].env_id)))
         per = max(1, cfg.batch_size // 2)
         rows: List[Dict[str, Any]] = []
-        for c0 in range(0, len(jobs), per):
-            rows.extend(self._screen_chunk(genomes, jobs[c0:c0 + per], steps, S, seed_base + c0, hook))
+        n_chunks = max(1, int(math.ceil(len(jobs) / per)))
+        for ci, c0 in enumerate(range(0, len(jobs), per)):
+            base = None
+            if label is not None:
+                base = ci * steps
+                live_progress(phase=label, total=n_chunks * steps, done=base,
+                              detail=f"lote {ci + 1}/{n_chunks} · {len(genomes)} genomas × {n_envs} ambientes "
+                                     f"(+ cópia contrafactual de cada universo)")
+            rows.extend(self._screen_chunk(genomes, jobs[c0:c0 + per], steps, S, seed_base + c0, hook, base))
         # agrega por genoma (média entre ambientes; instável se qualquer ambiente instável)
         agg: Dict[int, List[Dict[str, Any]]] = {}
         for r in rows:
@@ -223,7 +231,7 @@ class Screener:
             out.append(d)
         return out
 
-    def _screen_chunk(self, genomes, jobs, steps, S, run_seed, hook):
+    def _screen_chunk(self, genomes, jobs, steps, S, run_seed, hook, progress_base: Optional[int] = None):
         cfg, sim = self.cfg, self.sim
         n = len(jobs)
         gl = [genomes[gi] for gi, _, _ in jobs]
@@ -232,7 +240,12 @@ class Screener:
         seeds = [s for _, _, s in jobs]
         st = sim.init_state(gb, envs + envs, seeds + seeds, groups=list(range(n)) * 2, run_seed=run_seed)
         burn = min(cfg.screen_burn_in, steps // 2)
-        st = sim.run(gb, st, burn, callback=hook)
+        for t in range(burn):
+            st = sim.step(gb, st)
+            if hook is not None:
+                hook(st)
+            if progress_base is not None:
+                live_progress(done=progress_base + t + 1)
         # perturbação contrafactual local somente na cópia B
         r = 2
         c = S // 2
@@ -248,6 +261,8 @@ class Screener:
             st = sim.step(gb, st)
             if hook is not None:
                 hook(st)
+            if progress_base is not None:
+                live_progress(done=progress_base + burn + t + 1)
             if t % cfg.record_every == cfg.record_every - 1 or t == rest - 1:
                 frames.append(pool(st.U[:n]).float())
                 dms.append(pool((st.U[:n] - st.U[n:]).abs().sum(1, keepdim=True)).squeeze(1))
@@ -367,6 +382,8 @@ def decode_report(X: np.ndarray, y: np.ndarray, n_classes: int, n_perm: int, fol
         acc = balanced_accuracy(y, yp, n_classes)
         null = []
         for i in range(n_perm):
+            if i % 10 == 0:
+                live_progress()
             yperm = rng.permutation(y)
             ypp = cv_predictions(X, yperm, n_classes, dec, folds, seed + 1 + i)
             null.append(balanced_accuracy(yperm, ypp, n_classes))

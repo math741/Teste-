@@ -48,7 +48,8 @@ def autotune(cfg: GenesisConfig, hw: Dict[str, Any], device: torch.device) -> Di
         torch.cuda.empty_cache()
         cfg.batch_size = int(best)
         cap = {"DEBUG": 24, "FAST": 256, "RESEARCH": 1024, "EXTREME": 2048}[cfg.profile]
-        cfg.population_size = int(max(32, min(cap, best // max(1, cfg.screen_envs))))
+        # um lote de triagem por geração: resultados novos com mais frequência no painel
+        cfg.population_size = int(max(32, min(cap, best // max(1, 2 * cfg.screen_envs))))
         rep["vram_free"] = free; rep["vram_target_fraction"] = target
     else:
         torch.set_num_threads(max(1, os.cpu_count() or 1))
@@ -132,6 +133,7 @@ if DEVICE.type == "cuda":
     torch.backends.cudnn.allow_tf32 = False
     torch.set_float32_matmul_precision("highest")
 CFG = profile_config(PROFILE, HW, MASTER_SEED, MAX_SESSION_HOURS, MAX_GENERATIONS_THIS_SESSION)
+CFG.live_interval = float(LIVE_UPDATE_SECONDS)
 print(f"armazenamento: {PATHS.root} ({'Google Drive' if PATHS.on_drive else 'local — NÃO sobrevive à perda da sessão do Colab'})")
 print(f"hardware: {HW['gpu_name']} | VRAM {human_bytes(HW['vram_total'])} | CPU x{HW['cpu_count']} | torch {HW['torch']} CUDA {HW['cuda_version']}")
 print(f"perfil: {CFG.profile}")
@@ -159,7 +161,7 @@ else:
 
 # %%
 RUNTIME_FIELDS = ["batch_size", "precision", "use_compile", "max_session_hours", "max_generations_session",
-                  "checkpoint_every_minutes", "dashboard_every_seconds", "population_size"]
+                  "checkpoint_every_minutes", "dashboard_every_seconds", "population_size", "live_interval"]
 
 
 def open_lab() -> "GenesisLab":
@@ -191,9 +193,10 @@ def open_lab() -> "GenesisLab":
 
 LAB = open_lab()
 print(dashboard_text(LAB, "READY"))
+print("\n▼ O painel AO VIVO aparece logo abaixo, na seção 18 (atualiza sozinho a cada segundo).")
 
 # %% [markdown]
-# ## 18. PESQUISA CONTÍNUA
+# ### Motor da pesquisa contínua
 # ```
 # while not champion_gate_passed:
 #     evolve(); evaluate(); experiment(); archive(); checkpoint()
@@ -216,15 +219,20 @@ def resource_check(lab: "GenesisLab"):
         lab.logger.event("resource_check_failed", error=repr(e))
 
 
-def run_genesis(lab: "GenesisLab") -> str:
+def run_genesis(lab: "GenesisLab", live_interval: Optional[float] = None) -> str:
     cfg = lab.cfg
     t_end = lab.session_start + cfg.max_session_hours * 3600 - 300
     gens_this_session = 0
     reason = "unknown"
+    monitor = LiveMonitor(lab, interval=live_interval or cfg.live_interval, text_every=cfg.dashboard_every_seconds)
+    LIVE.monitor = monitor
+    verbose_before = lab.logger.verbose
+    if monitor.mode == "html":
+        lab.logger.verbose = False          # mensagens vão para o painel, não poluem a saída
     lab.logger.event("research_start", echo=True, generation=lab.counters["generation"], session=lab.counters["sessions"])
+    monitor.start()
     ref_speed = None
     slow = 0
-    dash_n = 0
     try:
         while lab.champion is None:
             if os.path.exists(lab.paths.stop_file):
@@ -263,15 +271,10 @@ def run_genesis(lab: "GenesisLab") -> str:
                 resource_check(lab)
             if time.time() - lab.last_checkpoint_ts > cfg.checkpoint_every_minutes * 60:
                 lab.save_checkpoint("periodic")
-            if time.time() - lab.last_dashboard_ts > cfg.dashboard_every_seconds:
-                dash_n += 1
-                show_dashboard(lab, "SEARCHING", plots=(dash_n % 10 == 0))
-                lab.last_dashboard_ts = time.time()
         if lab.champion is not None:
             reason = "GENESIS CHAMPION"
     except KeyboardInterrupt:
-        reason = "user interrupt"
-        print("\n[interrupt] parada solicitada — salvando estado...")
+        reason = "pausado pelo usuário"
     except Exception as e:
         reason = f"crash: {e!r}"
         crash = os.path.join(lab.paths.crash, f"crash_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
@@ -285,16 +288,31 @@ def run_genesis(lab: "GenesisLab") -> str:
         except Exception as e:
             print(f"[checkpoint] falha ao salvar no encerramento: {e}")
         rp = session_report(lab, reason)
-        show_dashboard(lab, "CHAMPION FOUND" if lab.champion else f"PAUSED ({reason})", plots=False)
-        print(f"\nrelatório da sessão: {rp}")
-        lab.logger.event("research_stop", echo=True, reason=reason, generation=lab.counters["generation"])
+        final = "GENESIS CHAMPION" if lab.champion else f"PAUSADO — {reason}"
+        monitor.finish(final)
+        LIVE.monitor = None
+        lab.logger.verbose = verbose_before
+        if monitor.mode == "text":
+            print(dashboard_text(lab, final))
+        print(f"⏸ {final}. Estado salvo na geração {lab.counters['generation']}. "
+              f"Para continuar, rode esta célula de novo (ou Executar tudo).\nrelatório da sessão: {rp}")
+        lab.logger.event("research_stop", echo=False, reason=reason, generation=lab.counters["generation"])
     return reason
 
 
+# %% [markdown]
+# ## 18. ▶ PESQUISA AO VIVO
+# A saída desta célula é o **painel ao vivo**: atualiza sozinho a cada segundo enquanto a pesquisa roda
+# (universos sendo simulados agora, fase e progresso, melhor candidato, descobertas, gráficos por geração).
+# Não precisa parar nada para ver resultados. ⏸ **Pausar**: botão ■ desta célula (salva tudo).
+# ▶ **Continuar**: rode esta célula de novo (na mesma sessão) ou `Executar tudo` (sessão nova) — retoma do checkpoint.
+
+# %%
+# @title ▶ PESQUISA AO VIVO — painel atualizado a cada segundo (rode de novo para continuar) { display-mode: "form" }
 if START_RESEARCH:
     STOP_REASON = run_genesis(LAB)
 else:
-    print("START_RESEARCH=False — pesquisa não iniciada (use run_genesis(LAB)).")
+    print("START_RESEARCH=False — pesquisa não iniciada (rode run_genesis(LAB) quando quiser).")
 
 # %% [markdown]
 # ## 19. Observação dos resultados (somente leitura)

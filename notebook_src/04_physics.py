@@ -505,6 +505,9 @@ class Simulator:
         st.G = new_G
         st.t += 1
         self.steps_done += B
+        m = LIVE.monitor
+        if m is not None:
+            m.on_step(self, gb, st)
         return st
 
     def run(self, gb: GenomeBatch, st: SimState, n: int, callback: Optional[Callable] = None) -> SimState:

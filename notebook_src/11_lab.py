@@ -85,6 +85,7 @@ class GenesisLab:
         self.best_level_global = -1
         self.throughput = {"universe_steps_per_s": 0.0, "evals_per_hour_est": 0.0}
         self.stop_reason = ""
+        self.last_viability: Dict[str, int] = {}
 
     # ==================================================================
     # utilidades de estado
@@ -116,6 +117,14 @@ class GenesisLab:
         sc["evidence"] = round(self.evidence.get(cid, 0.0), 3)
         sc["quality(fitness)"] = round(self.quality.get(cid, 0.0), 4)
         return sc
+
+    def say(self, text: str):
+        """Mensagens importantes: no painel ao vivo viram anúncios (sem poluir a saída); fora dele, print."""
+        m = LIVE.monitor
+        if m is not None and getattr(m, "mode", "text") == "html":
+            m.announce(text)
+        else:
+            print(text)
 
     def runtime_total(self) -> float:
         return self.runtime_at_start + (time.time() - self.session_start)
@@ -203,11 +212,13 @@ class GenesisLab:
     # ==================================================================
     # OBSERVE / MEASURE / PRESERVE
     # ==================================================================
-    def evaluate_and_integrate(self, genomes: List[Genome], parents: Dict[str, Tuple[str, str]]) -> Dict[str, Any]:
+    def evaluate_and_integrate(self, genomes: List[Genome], parents: Dict[str, Tuple[str, str]],
+                               label: Optional[str] = None) -> Dict[str, Any]:
         gen = self.counters["generation"]
         t0 = time.time()
         steps0 = self.sim.steps_done
-        descs = self.screener.screen(genomes, self.ve.envs_for("evolution"), derive_seed(self.cfg.master_seed, "screen", gen))
+        descs = self.screener.screen(genomes, self.ve.envs_for("evolution"), derive_seed(self.cfg.master_seed, "screen", gen),
+                                     label=label or f"Geração {gen}: triagem de {len(genomes)} universos")
         dt = time.time() - t0
         self.counters["evaluations"] += len(genomes)
         ds = self.sim.steps_done - steps0
@@ -215,6 +226,7 @@ class GenesisLab:
         if dt > 0:
             self.throughput["universe_steps_per_s"] = ds / dt
             self.throughput["evals_per_hour_est"] = len(genomes) / dt * 3600
+        self.last_viability = dict(collections.Counter(d["viability"] for d in descs))
         V = np.stack([descriptor_vector(d) for d in descs])
         pop_vecs = np.stack([self.vec[p] for p in self.population if p in self.vec]) if self.population else None
         others = np.vstack([V, pop_vecs]) if pop_vecs is not None and len(pop_vecs) else V
@@ -222,7 +234,11 @@ class GenesisLab:
         surp = self.surprise.score(V)
         stats = {"new_cells": 0, "map_inserts": 0, "anomalies": 0, "viable": 0}
         viable_ids, viable_vecs, viable_nov = [], [], []
-        for g, d, v, nv, sp in zip(genomes, descs, V, nov, surp):
+        live_progress(phase=f"Geração {gen}: arquivos, novidade, espécies", done=0, total=len(genomes),
+                      detail="MAP-Elites, novelty archive, zoo, linhagem, surpresa")
+        for i_, (g, d, v, nv, sp) in enumerate(zip(genomes, descs, V, nov, surp)):
+            if i_ % 64 == 0:
+                live_progress(done=i_)
             gid = g.genome_id
             self.store[gid] = g
             self.lineage.add(g)
@@ -340,6 +356,8 @@ class GenesisLab:
                 break
             if e.candidate_id not in self.store:
                 continue
+            live_progress(phase=f"Geração {self.counters['generation']}: experimento {n + 1}/{max_n}", done=n, total=max_n,
+                          detail=f"{e.probe} em {e.candidate_id} — {e.reason}")
             self.run_one_experiment(e)
             n += 1
         return n
@@ -437,7 +455,7 @@ class GenesisLab:
         self.logger.event("discovery", echo=False, discovery_id=did, candidate=cid, level=new, probe=res.probe)
         if new > self.best_level_global:
             self.best_level_global = new
-            print(discovery_report_text(rec))
+            self.say(discovery_report_text(rec))
             try:
                 rec["bundle"] = write_evidence_bundle(self, rec)
             except Exception as e:
@@ -453,11 +471,14 @@ class GenesisLab:
         self.champion_lab_runs += 1
         th, ps = self.cfg.thresholds, self.cfg.probe
         g = self.store[cid]
-        print(f"\n[ChampionLab] bateria final em HOLDOUT para {cid} (genoma congelado, zero evolução)")
+        self.say(f"[ChampionLab] bateria final em HOLDOUT para {cid} (genoma congelado, zero evolução)")
         seed = derive_seed(self.cfg.master_seed, "champion", cid)
         battery: Dict[str, TestResult] = {}
-        for probe in ["causality", "memory", "channel", "transformation", "composition"]:
+        live_progress(phase=f"ChampionLab: {cid}", done=0, total=10, detail="bateria final em holdout")
+        for i_, probe in enumerate(["causality", "memory", "channel", "transformation", "composition"]):
+            live_progress(done=i_, detail=f"holdout: {probe}")
             battery[probe] = self.ve.run_probe(probe, g, derive_seed(seed, probe), split="holdout")
+        live_progress(done=5, detail="holdout: generalização, robustez, replicação, ablação, análise avançada")
         battery["generalization"] = self.ve.run_probe("generalization", g, derive_seed(seed, "gen"), split="holdout", task="xor")
         battery["robustness"] = self.ve.run_probe("robustness", g, derive_seed(seed, "rob"), split="holdout")
         battery["replication"] = self.ve.run_probe("replication", g, derive_seed(seed, "rep"), target="channel",
@@ -503,7 +524,7 @@ class GenesisLab:
             write_champion_outputs(self, cid, battery, entry)
         else:
             reason = "NO UNIQUE CHAMPION" if all(gate.values()) and not dominant else "GATE NOT PASSED"
-            print(f"[ChampionLab] {cid}: {reason} — {gate} | dominância: {to_jsonable(dom)}")
+            self.say(f"[ChampionLab] {cid}: {reason} — {gate} | dominância: {to_jsonable(dom)}")
 
     # ==================================================================
     # GERAÇÃO
@@ -512,8 +533,11 @@ class GenesisLab:
         t0 = time.time()
         self.counters["generation"] += 1
         gen = self.counters["generation"]
+        live_progress(phase=f"Geração {gen}: mutação/crossover", done=0, total=1,
+                      detail=f"{self.cfg.population_size} filhos (operadores escolhidos pelo bandit)")
         kids, meta = self.make_offspring(self.cfg.population_size)
         stats = self.evaluate_and_integrate(kids, meta)
+        live_progress(phase=f"Geração {gen}: seleção e Scientist", done=0, total=1, detail="Pareto + novidade + espécies")
         self.select_survivors(self.population + [k.genome_id for k in kids])
         self.species.end_generation(gen, set(self.store[c].species_id for c in self.population))
         self.schedule_experiments([k.genome_id for k in kids])
@@ -695,7 +719,9 @@ class GenesisLab:
                 self.logger.event("cuda_rng_restore_failed", echo=True, error=repr(e))
 
     def save_checkpoint(self, reason: str = "periodic") -> str:
+        live_progress(phase="Salvando checkpoint", done=0, total=1, detail=f"{reason} → {self.paths.checkpoints}")
         p = self.ckpt.save(self.state_dict())
+        live_progress(done=1)
         self.last_checkpoint_ts = time.time()
         self.logger.event("checkpoint", reason=reason, path=p, generation=self.counters["generation"])
         return p

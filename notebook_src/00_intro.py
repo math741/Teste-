@@ -7,11 +7,14 @@
 # > E depois: **não acreditar nela até conseguirmos destruí-la, reproduzi-la e fazê-la funcionar novamente.**
 #
 # ### Como usar
-# 1. `Runtime → Change runtime type → GPU` (funciona em CPU também, em modo DEBUG).
-# 2. `Runtime → Run all`.
-# 3. O notebook faz: **BOOT → HARDWARE → TEST SUITE → CHECKPOINT SEARCH → NEW GENESIS / RESUME → EVOLUÇÃO → TRIAGEM → NOVELTY → SCIENTIST → PROMOÇÕES → VALIDAÇÃO → CHECKPOINT → REPETE**.
-# 4. Se a sessão cair, abra de novo e rode `Run all`: o estado é restaurado do último checkpoint válido (no Google Drive, se montado) e a **mesma** pesquisa continua.
-# 5. Para parar limpo: botão *stop* da célula (o Genesis captura a interrupção, salva checkpoint e relatório) ou crie o arquivo `STOP` na pasta do projeto.
+# 1. `Ambiente de execução → Alterar o tipo de ambiente de execução → GPU` (funciona em CPU também, em modo DEBUG).
+# 2. `Ambiente de execução → Executar tudo`. Autorize o Google Drive quando pedido (é o que guarda a pesquisa).
+# 3. Desça até a seção **18. PESQUISA AO VIVO**: a saída dela é um **painel que se atualiza sozinho a cada segundo**
+#    (universos sendo simulados agora, fase e progresso, melhor candidato, descobertas, gráficos). Não é preciso
+#    parar nada nem rodar outras células para ver resultados.
+# 4. A pesquisa continua sozinha até o Colab encerrar a sessão (checkpoint a cada poucos minutos).
+#    Para **pausar**: botão ■ da célula (salva tudo). Para **continuar**: rode a célula de novo, ou `Executar tudo`
+#    numa sessão nova — o último checkpoint válido é restaurado e a **mesma** pesquisa continua.
 #
 # ### Honestidade fundamental
 # Isto **não** simula o Universo físico real. O Genesis cria **universos artificiais completos dentro de suas próprias regras**:
@@ -24,17 +27,29 @@
 # Nada aqui é chamado de vida, organismo, inteligência, consciência ou AGI. LEVEL 10 permanece reservado.
 
 # %%
-# ============================================================================
-# CÉLULA 1 — CONFIGURAÇÃO DO USUÁRIO (defaults inteligentes; nada precisa ser mudado)
-# ============================================================================
+# @title ⚙️ Configuração (defaults inteligentes — nada precisa ser mudado) { display-mode: "form" }
 import os
 
-PROFILE = os.environ.get("GENESIS_PROFILE", "AUTO")          # AUTO | DEBUG | FAST | RESEARCH | EXTREME
-USE_GOOGLE_DRIVE = os.environ.get("GENESIS_USE_DRIVE", "1") == "1"   # recomendado: a continuidade entre sessões depende disso
-GENESIS_ROOT_OVERRIDE = os.environ.get("GENESIS_ROOT", "")   # pasta alternativa (opcional)
-MAX_SESSION_HOURS = float(os.environ.get("GENESIS_MAX_HOURS", "11.0"))   # encerramento limpo antes do limite do Colab
-MAX_GENERATIONS_THIS_SESSION = int(os.environ.get("GENESIS_MAX_GENERATIONS", "0"))  # 0 = sem limite
-RUN_BOOT_TESTS = os.environ.get("GENESIS_RUN_TESTS", "1") == "1"
-START_RESEARCH = os.environ.get("GENESIS_START_RESEARCH", "1") == "1"
-FORCE_NEW_GENESIS = os.environ.get("GENESIS_FORCE_NEW", "0") == "1"  # True = ignora checkpoints e cria nova pesquisa
-MASTER_SEED = int(os.environ.get("GENESIS_SEED", "20261122"))
+PROFILE = "AUTO"  # @param ["AUTO", "DEBUG", "FAST", "RESEARCH", "EXTREME"]
+USE_GOOGLE_DRIVE = True  # @param {type:"boolean"}
+LIVE_UPDATE_SECONDS = 1.0  # @param {type:"number"}
+MAX_SESSION_HOURS = 24.0  # @param {type:"number"}
+MAX_GENERATIONS_THIS_SESSION = 0  # @param {type:"integer"}
+RUN_BOOT_TESTS = True  # @param {type:"boolean"}
+START_RESEARCH = True  # @param {type:"boolean"}
+FORCE_NEW_GENESIS = False  # @param {type:"boolean"}
+MASTER_SEED = 20261122  # @param {type:"integer"}
+GENESIS_ROOT_OVERRIDE = ""  # @param {type:"string"}
+
+# variáveis de ambiente (execução local/automatizada) têm precedência sobre o formulário
+_env = os.environ.get
+PROFILE = _env("GENESIS_PROFILE", PROFILE)
+USE_GOOGLE_DRIVE = _env("GENESIS_USE_DRIVE", "1" if USE_GOOGLE_DRIVE else "0") == "1"
+LIVE_UPDATE_SECONDS = float(_env("GENESIS_LIVE_SECONDS", LIVE_UPDATE_SECONDS))
+MAX_SESSION_HOURS = float(_env("GENESIS_MAX_HOURS", MAX_SESSION_HOURS))      # 0–24 h; checkpoints frequentes de qualquer forma
+MAX_GENERATIONS_THIS_SESSION = int(_env("GENESIS_MAX_GENERATIONS", MAX_GENERATIONS_THIS_SESSION))  # 0 = sem limite
+RUN_BOOT_TESTS = _env("GENESIS_RUN_TESTS", "1" if RUN_BOOT_TESTS else "0") == "1"
+START_RESEARCH = _env("GENESIS_START_RESEARCH", "1" if START_RESEARCH else "0") == "1"
+FORCE_NEW_GENESIS = _env("GENESIS_FORCE_NEW", "1" if FORCE_NEW_GENESIS else "0") == "1"
+MASTER_SEED = int(_env("GENESIS_SEED", MASTER_SEED))
+GENESIS_ROOT_OVERRIDE = _env("GENESIS_ROOT", GENESIS_ROOT_OVERRIDE)

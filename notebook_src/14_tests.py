@@ -278,6 +278,37 @@ class BootSuite:
             assert e30 < 1e-3, f"30 passos, leis de controle: CPU vs CUDA erro relativo {e30:.2e}"
             return f"rel.err 1 passo={e1:.1e}, 30 passos (controles)={e30:.1e}; ruído: fluxo por dispositivo"
 
+        def test_live_panel():
+            lab = self.mini_lab("live")
+            lab.initialize()
+            parts = {}
+
+            class _H:
+                def __init__(self, k): self.k = k
+                def update(self, h): parts[self.k] = getattr(h, "data", str(h))
+
+            class _M(LiveMonitor):
+                def _open_handles(self, now):
+                    best = self.lab.best_candidate()
+                    parts.update(head=self._head_html(now), view=self._view_html(now, best), charts=self._charts_html())
+                    self.handles = {k: _H(k) for k in ("head", "view", "charts")}
+                    self.last_refresh = self.view_ts = self.charts_ts = now
+            m = _M(lab, interval=0.0)
+            m.mode = "html"
+            LIVE.monitor = m
+            try:
+                m.start()
+                lab.generation_step()
+                m.render(force=True)
+            finally:
+                LIVE.monitor = None
+            assert m.errors == 0, "erro ao desenhar o painel (veja events.jsonl: live_render_error)"
+            assert "AO VIVO" in parts["head"] and "MELHOR CANDIDATO" in parts["view"] and "<svg" in parts["charts"]
+            assert "data:image/jpeg;base64," in parts["view"], "mosaico ao vivo não foi gerado"
+            jpg = mosaic_jpeg([np.random.default_rng(0).normal(size=(cfg.channels_max, 16, 16))])
+            assert jpg[:2] == b"\xff\xd8", "JPEG inválido"
+            return f"painel: {sum(len(v) for v in parts.values()) // 1024} KB de HTML por quadro"
+
         for name, fn in [("test_state_initialization", test_state_initialization), ("test_simulation_kernel", test_simulation_kernel),
                          ("test_dynamics_shape", test_dynamics_shape), ("test_no_nan", test_no_nan),
                          ("test_mutation", test_mutation), ("test_checkpoint_save", test_checkpoint_save),
@@ -286,7 +317,7 @@ class BootSuite:
                          ("test_channel_probe", test_channel_probe), ("test_transformation_instrument", test_transformation_instrument),
                          ("test_recovery_probe", test_recovery_probe), ("test_archive", test_archive),
                          ("test_resume", test_resume), ("test_discovery_reproduction", test_discovery_reproduction),
-                         ("test_device_consistency", test_device_consistency)]:
+                         ("test_device_consistency", test_device_consistency), ("test_live_panel", test_live_panel)]:
             self.run(name, fn)
         return all(ok for _, ok, _, _ in self.results)
 
