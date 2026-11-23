@@ -278,6 +278,29 @@ class BootSuite:
             assert e30 < 1e-3, f"30 passos, leis de controle: CPU vs CUDA erro relativo {e30:.2e}"
             return f"rel.err 1 passo={e1:.1e}, 30 passos (controles)={e30:.1e}; ruído: fluxo por dispositivo"
 
+        def test_signal_instruments():
+            """Medidas graduadas da triagem (gradiente da busca dirigida) com controles: o link que copia A em B
+            transmite; identidade e ruído não; identidade guarda traço local, ruído não. O instrumento de não
+            linearidade é validado com sinais sintéticos: resposta só ímpar (linear) ≈ 0; com termo par > 0."""
+            gs = [ctrl["identity"], ctrl["noise_replace"], ctrl["link_copy"]]
+            ev = [e for e in envs if e.split == "evolution"]
+            r = {k: x for k, x in zip(["identity", "noise", "link"], scr.screen(gs, ev, 11))}
+            assert r["link"]["transmission"] > 0.3, f"controle positivo de transmissão fraco: {r['link']['transmission']:.3f}"
+            assert r["identity"]["transmission"] < 0.02 and r["noise"]["transmission"] < 0.02, "transmissão sem canal"
+            assert r["identity"]["memory_trace"] > 0.3 and r["noise"]["memory_trace"] < 0.1, "traço de memória"
+            g_ = torch.Generator().manual_seed(0)
+            T_, n_, nf_ = 6, 5, 12
+            base = torch.randn(T_, n_, nf_, generator=g_)
+            a = torch.randn(T_, n_, nf_, generator=g_)
+            q = torch.randn(T_, n_, nf_, generator=g_)
+            lin, _ = signal_metrics(torch.stack([base, base + a, base - a], 1), torch.ones(T_, n_), list(range(1, T_ + 1)))
+            par, _ = signal_metrics(torch.stack([base, base + a + q, base - a + q], 1), torch.ones(T_, n_), list(range(1, T_ + 1)))
+            assert lin["nonlinearity_raw"].max() < 0.05, "resposta linear acusada como não linear"
+            assert par["nonlinearity_raw"].min() > 0.3, "termo par não detectado"
+            return (f"tx link={r['link']['transmission']:.2f} id={r['identity']['transmission']:.2f} · "
+                    f"traço id={r['identity']['memory_trace']:.2f} ruído={r['noise']['memory_trace']:.2f} · "
+                    f"não-lin sintética {lin['nonlinearity_raw'].max():.2f}→{par['nonlinearity_raw'].min():.2f}")
+
         def test_live_panel():
             lab = self.mini_lab("live")
             lab.initialize()
@@ -317,7 +340,8 @@ class BootSuite:
                          ("test_channel_probe", test_channel_probe), ("test_transformation_instrument", test_transformation_instrument),
                          ("test_recovery_probe", test_recovery_probe), ("test_archive", test_archive),
                          ("test_resume", test_resume), ("test_discovery_reproduction", test_discovery_reproduction),
-                         ("test_device_consistency", test_device_consistency), ("test_live_panel", test_live_panel)]:
+                         ("test_device_consistency", test_device_consistency), ("test_live_panel", test_live_panel),
+                         ("test_signal_instruments", test_signal_instruments)]:
             self.run(name, fn)
         return all(ok for _, ok, _, _ in self.results)
 

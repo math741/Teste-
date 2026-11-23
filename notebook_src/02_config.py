@@ -51,7 +51,7 @@ class ProbeSettings:
     memory_delays: List[int] = field(default_factory=lambda: [1, 10, 100, 1000])
     memory_history_steps: int = 6
     channel_symbols: int = 4
-    channel_distance: int = 16
+    channel_distance: int = 12             # distância inicial A→B; o currículo aumenta quando canais aparecem
     channel_times: List[int] = field(default_factory=lambda: [0, 2, 4, 8, 16, 32, 64])
     channel_noise: float = 0.02
     stim_radius: int = 3
@@ -83,6 +83,7 @@ class GenesisConfig:
     links_max: int = 4
     delay_max: int = 4
     state_bound: float = 6.0
+    local_rate_limit: bool = True          # física v2: limite de taxa por célula (v1: dt adaptativo global)
     # população / triagem
     population_size: int = 128
     batch_size: int = 256
@@ -109,7 +110,9 @@ class GenesisConfig:
     dashboard_every_seconds: float = 30.0
     live_interval: float = 1.0
     max_generations_session: int = 0
-    experiment_time_fraction: float = 0.35
+    experiment_time_fraction: float = 0.5
+    directed_search: bool = True           # busca dirigida pela escada (foco no próximo degrau)
+    focus_tests_per_generation: int = 3    # testes diretos do degrau-alvo por geração (fail-fast)
     max_experiments_per_generation: int = 6
     champion_lab_max_per_session: int = 2
     # sementes
@@ -185,7 +188,8 @@ def profile_config(profile: str, hw: Dict[str, Any], master_seed: int, max_hours
         cfg.screen_envs, cfg.screen_steps, cfg.screen_burn_in, cfg.record_every, cfg.metric_res = 2, 96, 32, 4, 16
         cfg.map_bins = [6, 6, 4]
         cfg.checkpoint_every_minutes, cfg.dashboard_every_seconds = 2.0, 10.0
-        cfg.max_experiments_per_generation = 3
+        cfg.max_experiments_per_generation = 4
+        cfg.focus_tests_per_generation = 2
         cfg.stagnation_window = 6
         pr.trials, pr.permutations, pr.warmup = 8, 40, 24
         pr.memory_delays, pr.channel_distance = [1, 10, 40], 8

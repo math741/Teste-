@@ -18,6 +18,7 @@ SCORECARD_FIELDS = ["activity", "persistence", "mobility", "complexity", "causal
                     "replication", "novelty"]
 PROBE_LEVEL = {"causality": 2, "memory": 3, "channel": 4, "transformation": 5, "composition": 6, "generalization": 7,
                "adaptation": 8}
+PROBE_ALIAS = {"channel_noise": "channel", "functional_recovery": "channel"}
 PROBE_COST_DEFAULT = {"causality": 1.0, "memory": 2.0, "channel": 2.0, "transformation": 2.0, "composition": 3.0,
                       "generalization": 3.0, "recovery": 1.5, "robustness": 4.0, "adaptation": 4.0, "replication": 12.0,
                       "ablation": 15.0, "long_screen": 2.0, "advanced": 10.0, "functional_recovery": 2.5,
@@ -94,9 +95,11 @@ class GenesisScientist:
         self._fail_cache: Dict[str, Tuple[int, np.ndarray, Any]] = {}
         self.advisor: Optional[Callable] = None
 
-    @staticmethod
-    def key(cid: str, probe: str, kwargs: Dict[str, Any]) -> str:
-        return f"{cid}|{probe}|{json.dumps(to_jsonable(kwargs), sort_keys=True)}"
+    def key(self, cid: str, probe: str, kwargs: Dict[str, Any]) -> str:
+        """Chave anti-repetição. Inclui a versão do probe quando ≠ 1.0: protocolo novo pode re-testar."""
+        v = getattr(self, "versions", {}).get(PROBE_ALIAS.get(probe, probe), "1.0")
+        tag = probe if v == "1.0" else f"{probe}@{v}"
+        return f"{cid}|{tag}|{json.dumps(to_jsonable(kwargs), sort_keys=True)}"
 
     def p_pass(self, probe: str) -> float:
         s = self.stats.get(probe, {"n": 0, "pass": 0})
@@ -148,11 +151,19 @@ class GenesisScientist:
         out: List[Experiment] = []
         bonus = (1.0 if anomalous else 0.0) + 0.25 * max(0, level) + 0.3 * sum(v == STATUS_PASS for v in status.values())
 
-        def want(probe, reason, extra=0.0, **kw):
+        GATED = {"transformation": 4, "composition": 5, "generalization": 6, "adaptation": 7, "robustness": 4,
+                 "channel_noise": 4, "functional_recovery": 4, "ablation": 3}
+
+        def want(probe, reason, extra=0.0, prereq=False, **kw):
             k = self.key(cid, probe, kw)
             if k in self.done or k in self.queued or any(self.key(e.candidate_id, e.probe, e.kwargs) == k for e in out):
                 return
-            if probe in PROBE_LEVEL and not anomalous and self.similar_to_failure(probe, vec):
+            # busca dirigida: segue a ordem da escada — só o próximo degrau do candidato (ou pré-requisitos que faltam)
+            if self.cfg.directed_search and not prereq:
+                need = PROBE_LEVEL[probe] - 1 if probe in PROBE_LEVEL else GATED.get(probe, -1)
+                if level < need:
+                    return
+            if probe in PROBE_LEVEL and not anomalous and not prereq and self.similar_to_failure(probe, vec):
                 return
             out.append(Experiment(cid, probe, kw, self.value_of_information(probe, bonus + extra, level, kw), reason, gen))
         if d.get("viability") not in ("VIABLE", "FROZEN"):
@@ -161,15 +172,23 @@ class GenesisScientist:
             want("long_screen", "sobrevivente de triagem (multi-fidelidade)" if is_top else "anomalia", 0.5)
         if "causality" not in status and d.get("causal_spread", 0) > th.causal_spread:
             want("causality", f"causal_spread={d['causal_spread']:.2f}>thr")
-        elif "causality" not in status and (level >= 1 and any(v == STATUS_PASS for v in status.values())):
-            want("causality", "pré-requisito da escada (outro probe já passou)", 1.0)
+        # pré-requisitos da escada: se um degrau mais alto já passou (teste direto do foco), os de baixo — baratos —
+        # são testados logo; o nível só é concedido quando a sequência inteira passa
+        top_passed = max([PROBE_LEVEL[p] for p in PROBE_LEVEL if status.get(p) == STATUS_PASS], default=0)
+        for p, lv in sorted(PROBE_LEVEL.items(), key=lambda x: x[1]):
+            if lv < top_passed and p not in status:
+                if p == "generalization":
+                    want(p, f"pré-requisito da escada (L{top_passed} já passou)", 60.0, prereq=True, task="channel")
+                else:
+                    want(p, f"pré-requisito da escada (L{top_passed} já passou)", 60.0, prereq=True)
         if d.get("persistence", 0) > th.persistence and "recovery" not in status:
             want("recovery", f"persistence={d['persistence']:.2f}>thr")
         if status.get("causality") == STATUS_PASS and "memory" not in status:
             want("memory", "causality PASS -> memory probe", 0.5)
         if d.get("persistence", 0) > th.persistence and "memory" not in status and level >= 1:
             want("memory", "estrutura persistente -> memory probe")
-        if status.get("memory") == STATUS_PASS and "channel" not in status:
+        low_tx = self.cfg.directed_search and "transmission" in d and d["transmission"] < 0.01 and not anomalous
+        if status.get("memory") == STATUS_PASS and "channel" not in status and not low_tx:
             want("channel", "memory PASS -> channel probe", 1.0)
         if status.get("channel") == STATUS_PASS:
             if "transformation" not in status:
@@ -234,7 +253,7 @@ class GenesisScientist:
         gen = 0 if gen is None else gen
         self._pops = getattr(self, "_pops", 0) + 1
         self.queue.sort(key=lambda e: -self._eff(e, gen))
-        explore = self._pops % 3 == 0
+        explore = self._pops % (5 if self.cfg.directed_search else 3) == 0
         order = ([i for i, e in enumerate(self.queue) if e.probe in self.EXPLORATION_PROBES] if explore else []) + \
             list(range(len(self.queue)))
         for i in order:

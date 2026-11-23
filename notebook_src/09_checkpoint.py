@@ -19,9 +19,25 @@ def _ckpt_hashes(state: dict) -> Dict[str, str]:
 
 def migrate_checkpoint(state: dict) -> dict:
     """Estrutura de migração: aplica conversores sucessivos v -> v+1."""
-    MIGRATIONS: Dict[int, Callable[[dict], dict]] = {
-        # exemplo para versões futuras: 1: lambda s: {**s, "novo_campo": default, "checkpoint_version": 2},
-    }
+    def v1_to_v2(s: dict) -> dict:
+        # Genesis 1.1: busca dirigida + canal com distância inicial de currículo 12 (RESEARCH/FAST/EXTREME).
+        # A configuração científica muda por migração explícita e registrada (histórico de thresholds).
+        s = dict(s)
+        cfg = copy.deepcopy(s["config"])
+        pr = cfg.setdefault("probe", {})
+        old_d = pr.get("channel_distance")
+        if cfg.get("profile") in ("RESEARCH", "FAST", "EXTREME") and isinstance(old_d, int) and old_d > 12:
+            pr["channel_distance"] = 12
+        cfg.setdefault("directed_search", True)
+        cfg.setdefault("local_rate_limit", False)     # pesquisas antigas continuam com a mesma física (dt global)
+        cfg.setdefault("focus_tests_per_generation", 3)
+        s["config"] = cfg
+        s["migrations"] = list(s.get("migrations", [])) + [{"from": 1, "to": 2, "ts": iso_now(),
+                                                             "channel_distance": [old_d, pr.get("channel_distance")]}]
+        s["checkpoint_version"] = 2
+        return s
+
+    MIGRATIONS: Dict[int, Callable[[dict], dict]] = {1: v1_to_v2}
     v = int(state.get("checkpoint_version", 1))
     while v < CHECKPOINT_VERSION:
         if v not in MIGRATIONS:

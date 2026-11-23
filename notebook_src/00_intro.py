@@ -12,7 +12,11 @@
 # 3. Desça até a seção **18. PESQUISA AO VIVO**: a saída dela é um **painel que se atualiza sozinho a cada segundo**
 #    (universos sendo simulados agora, fase e progresso, melhor candidato, descobertas, gráficos). Não é preciso
 #    parar nada nem rodar outras células para ver resultados.
-# 4. A pesquisa continua sozinha até o Colab encerrar a sessão (checkpoint a cada poucos minutos).
+# 4. **Busca dirigida pela escada** (padrão): o laboratório mira sempre o degrau logo acima do melhor nível já
+#    alcançado (ex.: chegou ao L3 → foco no L4 canal). O fitness passa a premiar a medida graduada desse degrau,
+#    os pais vêm principalmente da fronteira e os melhores candidatos são testados direto no probe do degrau.
+#    Desligue `DIRECTED_SEARCH` para exploração aberta.
+# 5. A pesquisa continua sozinha até o Colab encerrar a sessão (checkpoint a cada poucos minutos).
 #    Para **pausar**: botão ■ da célula (salva tudo). Para **continuar**: rode a célula de novo, ou `Executar tudo`
 #    numa sessão nova — o último checkpoint válido é restaurado e a **mesma** pesquisa continua.
 #
@@ -33,6 +37,7 @@ import os
 PROFILE = "AUTO"  # @param ["AUTO", "DEBUG", "FAST", "RESEARCH", "EXTREME"]
 USE_GOOGLE_DRIVE = True  # @param {type:"boolean"}
 LIVE_UPDATE_SECONDS = 1.0  # @param {type:"number"}
+DIRECTED_SEARCH = True  # @param {type:"boolean"}
 MAX_SESSION_HOURS = 24.0  # @param {type:"number"}
 MAX_GENERATIONS_THIS_SESSION = 0  # @param {type:"integer"}
 RUN_BOOT_TESTS = True  # @param {type:"boolean"}
@@ -46,6 +51,7 @@ _env = os.environ.get
 PROFILE = _env("GENESIS_PROFILE", PROFILE)
 USE_GOOGLE_DRIVE = _env("GENESIS_USE_DRIVE", "1" if USE_GOOGLE_DRIVE else "0") == "1"
 LIVE_UPDATE_SECONDS = float(_env("GENESIS_LIVE_SECONDS", LIVE_UPDATE_SECONDS))
+DIRECTED_SEARCH = _env("GENESIS_DIRECTED", "1" if DIRECTED_SEARCH else "0") == "1"   # foco no próximo degrau da escada
 MAX_SESSION_HOURS = float(_env("GENESIS_MAX_HOURS", MAX_SESSION_HOURS))      # 0–24 h; checkpoints frequentes de qualquer forma
 MAX_GENERATIONS_THIS_SESSION = int(_env("GENESIS_MAX_GENERATIONS", MAX_GENERATIONS_THIS_SESSION))  # 0 = sem limite
 RUN_BOOT_TESTS = _env("GENESIS_RUN_TESTS", "1" if RUN_BOOT_TESTS else "0") == "1"

@@ -49,7 +49,7 @@ def autotune(cfg: GenesisConfig, hw: Dict[str, Any], device: torch.device) -> Di
         cfg.batch_size = int(best)
         cap = {"DEBUG": 24, "FAST": 256, "RESEARCH": 1024, "EXTREME": 2048}[cfg.profile]
         # um lote de triagem por geração: resultados novos com mais frequência no painel
-        cfg.population_size = int(max(32, min(cap, best // max(1, 2 * cfg.screen_envs))))
+        cfg.population_size = int(max(32, min(cap, best // max(1, 3 * cfg.screen_envs))))
         rep["vram_free"] = free; rep["vram_target_fraction"] = target
     else:
         torch.set_num_threads(max(1, os.cpu_count() or 1))
@@ -134,6 +134,7 @@ if DEVICE.type == "cuda":
     torch.set_float32_matmul_precision("highest")
 CFG = profile_config(PROFILE, HW, MASTER_SEED, MAX_SESSION_HOURS, MAX_GENERATIONS_THIS_SESSION)
 CFG.live_interval = float(LIVE_UPDATE_SECONDS)
+CFG.directed_search = bool(DIRECTED_SEARCH)
 print(f"armazenamento: {PATHS.root} ({'Google Drive' if PATHS.on_drive else 'local — NÃO sobrevive à perda da sessão do Colab'})")
 print(f"hardware: {HW['gpu_name']} | VRAM {human_bytes(HW['vram_total'])} | CPU x{HW['cpu_count']} | torch {HW['torch']} CUDA {HW['cuda_version']}")
 print(f"perfil: {CFG.profile}")
@@ -161,7 +162,9 @@ else:
 
 # %%
 RUNTIME_FIELDS = ["batch_size", "precision", "use_compile", "max_session_hours", "max_generations_session",
-                  "checkpoint_every_minutes", "dashboard_every_seconds", "population_size", "live_interval"]
+                  "checkpoint_every_minutes", "dashboard_every_seconds", "population_size", "live_interval",
+                  "directed_search", "focus_tests_per_generation", "experiment_time_fraction",
+                  "max_experiments_per_generation"]
 
 
 def open_lab() -> "GenesisLab":

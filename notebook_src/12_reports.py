@@ -12,6 +12,10 @@ LIMITATIONS = [
     "Tempo de GPU não é energia física; nenhum resultado implica viabilidade de hardware.",
     "Adaptação = mudança de comportamento com manutenção de função; não implica aprendizado, vida ou agência.",
     "Um único notebook/Colab limita tamanho de mundo, horizonte temporal e número de sementes.",
+    "Conservação global (lei opcional do genoma) é não local: permite influência instantânea fraca à distância; "
+    "pesquisas criadas antes da v1.1 usam ainda o dt adaptativo global (física v1), que também acopla o universo inteiro.",
+    "Busca dirigida: medidas graduadas de triagem (transmissão, não linearidade, traço) orientam a evolução; só os probes "
+    "com controles concedem níveis.",
 ]
 
 

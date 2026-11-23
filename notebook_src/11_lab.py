@@ -28,7 +28,6 @@ def pareto_ranks(Obj: np.ndarray) -> np.ndarray:
     return ranks
 
 
-PROBE_ALIAS = {"channel_noise": "channel", "functional_recovery": "channel"}
 
 
 class GenesisLab:
@@ -40,9 +39,11 @@ class GenesisLab:
         self.envs = make_environment_suite(cfg.master_seed)
         self.screener = Screener(self.sim, cfg)
         self.curriculum: Dict[str, float] = {"perturbation_mult": 1.0, "memory_delay_mult": 1.0, "channel_distance_add": 0}
+        self.screener.curriculum = self.curriculum          # triagem e probes compartilham a geometria A→B
         self.ve = ValidationEngine(self.sim, cfg, self.envs, self.screener, self.space, self.curriculum)
         self.ladder = DiscoveryLadder(cfg.thresholds)
         self.scientist = GenesisScientist(cfg)
+        self.scientist.versions = dict(ValidationEngine.PROBE_VERSIONS)
         self.ckpt = CheckpointManager(paths, logger)
         self.store: Dict[str, Genome] = {}
         self.population: List[str] = []
@@ -86,12 +87,99 @@ class GenesisLab:
         self.throughput = {"universe_steps_per_s": 0.0, "evals_per_hour_est": 0.0}
         self.stop_reason = ""
         self.last_viability: Dict[str, int] = {}
+        self.focus = 1
+        self.focus_tests_done = 0
+        self.migrations: List[Dict[str, Any]] = []
 
     # ==================================================================
     # utilidades de estado
     # ==================================================================
     def status_of(self, cid: str) -> Dict[str, str]:
         return {k: self.results[r].status for k, r in self.tests.get(cid, {}).items() if r in self.results}
+
+    def status_current(self, cid: str) -> Dict[str, str]:
+        """Status só dos resultados obtidos com a versão VIGENTE de cada probe (resultados antigos continuam no
+        histórico, mas não impedem o re-teste quando o protocolo muda)."""
+        out = {}
+        for k, rid in self.tests.get(cid, {}).items():
+            r = self.results.get(rid)
+            if r is None:
+                continue
+            ver = self.ve.PROBE_VERSIONS.get(r.probe)
+            if ver is not None and not str(r.version).endswith(f"/{r.probe}-{ver}"):
+                continue
+            out[k] = r.status
+        return out
+
+    # ---------------- busca dirigida pela escada ----------------
+    def focus_level(self) -> int:
+        """Próximo degrau a conquistar: um acima do melhor nível já alcançado."""
+        best = max([self.best_level_global, 0] + [l for l in self.levels.values()])
+        return int(min(9, max(1, best + 1)))
+
+    def focus_key(self) -> str:
+        return FOCUS_PROXY_KEY.get(self.focus_level(), "transmission")
+
+    def weights(self) -> np.ndarray:
+        return quality_weights(self.focus_level(), self.cfg.directed_search)
+
+    def recompute_quality(self, cid: str, w: Optional[np.ndarray] = None) -> float:
+        d = self.desc.get(cid)
+        if d is None:
+            return -1.0
+        w = self.weights() if w is None else w
+        obj = quality_objectives(d, self.cfg.thresholds, max(0, self.levels.get(cid, 0)))
+        if d.get("viability") == "VIABLE":
+            q = float((obj * w).sum())
+        else:
+            obj, q = obj * 0 - 1, -1.0
+        self.objectives[cid], self.quality[cid] = obj, q
+        return q
+
+    def refresh_quality(self):
+        """Recalcula fitness de todos com os pesos do foco atual (os elites do MAP passam a competir na mesma régua)."""
+        w = self.weights()
+        for cid in list(self.desc.keys()):
+            self.recompute_quality(cid, w)
+        for cell in self.map.cells.values():
+            if cell["genome_id"] in self.quality:
+                cell["quality"] = self.quality[cell["genome_id"]]
+        self.focus = self.focus_level()
+
+    def frontier(self, k: int = 16) -> List[str]:
+        """Fronteira da escada: os validados mais altos + os que mais se aproximam do próximo degrau (proxy do foco)."""
+        key = self.focus_key()
+        val = lambda c: float(self.desc.get(c, {}).get(key, 0.0))
+        cands = [c for c, l in self.levels.items() if l >= 1 and c in self.store and c in self.desc]
+        by_level = sorted(cands, key=lambda c: (-self.levels[c], -val(c), -self.evidence.get(c, 0.0)))[: max(1, k // 2)]
+        by_proxy = sorted(cands, key=lambda c: -val(c))[:k]
+        return list(dict.fromkeys(by_level + by_proxy))[:k]
+
+    SIGNAL_KEYS = ["transmission", "transmission_raw", "nonlinearity", "nonlinearity_raw", "memory_trace",
+                   "tx_consistency", "nl_consistency", "tx_latency", "tx_snr"]
+
+    def rescreen_missing(self, limit: int = 16) -> int:
+        """Candidatos de checkpoints antigos (sem as medidas de sinal) são re-triados uma vez. Só as medidas novas são
+        acrescentadas: os descritores que sustentam níveis já validados não mudam."""
+        ids = [c for c in self.frontier(limit) + self.population[:limit]
+               if c in self.store and c in self.desc and "transmission" not in self.desc[c]]
+        ids = list(dict.fromkeys(ids))[:limit]
+        if not ids:
+            return 0
+        gen = self.counters["generation"]
+        descs = self.screener.screen([self.store[c] for c in ids], self.ve.envs_for("evolution"),
+                                     derive_seed(self.cfg.master_seed, "rescreen", gen),
+                                     label=f"Re-triagem de {len(ids)} candidatos com as medidas de sinal (v1.1)")
+        self.counters["evaluations"] += len(ids)
+        for c, d in zip(ids, descs):
+            merged = dict(self.desc[c])
+            merged.update({k: d[k] for k in self.SIGNAL_KEYS if k in d})
+            self.desc[c] = merged
+            self.recompute_quality(c)
+            if merged.get("viability") == "VIABLE":
+                self.map.try_insert(c, merged, self.quality[c], gen)
+        self.logger.event("rescreen", n=len(ids), generation=gen)
+        return len(ids)
 
     def result_of(self, cid: str, key: str) -> Optional[TestResult]:
         rid = self.tests.get(cid, {}).get(key)
@@ -129,12 +217,6 @@ class GenesisLab:
     def runtime_total(self) -> float:
         return self.runtime_at_start + (time.time() - self.session_start)
 
-    def probe_bonus(self, cid: str) -> float:
-        st = self.status_of(cid)
-        vals = [self.results[self.tests[cid][k]].score for k in ["memory", "channel", "causality"]
-                if st.get(k) == STATUS_PASS and np.isfinite(self.results[self.tests[cid][k]].score)]
-        return float(np.mean(vals)) if vals else 0.0
-
     # ==================================================================
     # CREATE
     # ==================================================================
@@ -165,13 +247,23 @@ class GenesisLab:
         rng = self.rng
         pop = [p for p in self.population if p in self.store]
         out: List[str] = []
-        n_map = int(n * 0.35); n_nov = int(n * 0.2 * self.stagnation["novelty_weight"]); n_nov = min(n_nov, n // 2)
+        if self.cfg.directed_search:
+            # busca dirigida: boa parte dos pais vem da fronteira da escada; a estagnação devolve espaço à exploração
+            stage = self.stagnation["stage"]
+            fr = self.frontier(16)
+            n_front = int(n * max(0.2, 0.5 - 0.06 * stage)) if fr else 0
+            out += [fr[i] for i in rng.integers(0, len(fr), size=n_front)] if n_front else []
+            n_map = int(n * 0.2)
+            n_nov = min(n // 2, int(n * (0.08 + 0.04 * stage) * self.stagnation["novelty_weight"]))
+        else:
+            n_map = int(n * 0.35)
+            n_nov = min(n // 2, int(n * 0.2 * self.stagnation["novelty_weight"]))
         out += [g for g in self.map.sample(rng, n_map) if g in self.store]
         nov_ids = [g for g in self.novelty.ids[-500:] if g in self.store]
         if nov_ids:
             out += [nov_ids[i] for i in rng.integers(0, len(nov_ids), size=n_nov)]
         if pop:
-            obj = np.stack([self.objectives.get(p, np.zeros(7)) for p in pop])
+            obj = np.stack([self.objectives.get(p, np.zeros(len(OBJECTIVE_NAMES))) for p in pop])
             ranks = pareto_ranks(obj)
             nov = np.asarray([self.novelty_score.get(p, 0.0) for p in pop])
             while len(out) < n:
@@ -187,8 +279,11 @@ class GenesisLab:
 
     def make_offspring(self, n: int) -> Tuple[List[Genome], Dict[str, Tuple[str, str]]]:
         gen = self.counters["generation"]
-        n_imm = max(0, int(round(n * self.cfg.immigrant_rate * (3 if self.stagnation["stage"] >= 3 else 1))))
+        stage = self.stagnation["stage"]
+        imm = self.cfg.immigrant_rate * (3 if stage >= 3 else 1) * (0.4 if self.cfg.directed_search and stage < 3 else 1)
+        n_imm = max(0, int(round(n * imm)))
         parents = self.select_parents(n - n_imm)
+        front = set(self.frontier(16)) if self.cfg.directed_search else set()
         kids: List[Genome] = []
         meta: Dict[str, Tuple[str, str]] = {}
         for pid in parents:
@@ -200,7 +295,8 @@ class GenesisLab:
                 other = mate.params if mate is not None else None
                 if other is None:
                     op = "gauss_small"
-            params, rec = self.space.mutate(p.params, self.rng, op, self.stagnation["sigma_mult"], other)
+            sm = self.stagnation["sigma_mult"] * (0.6 if pid in front else 1.0)    # refino local em volta da fronteira
+            params, rec = self.space.mutate(p.params, self.rng, op, sm, other)
             g = Genome(params=params, parent_ids=[pid] + ([mate.genome_id] if other is not None else []),
                        generation=gen, mutation_record=rec, origin="mutation", operator=op)
             kids.append(g); meta[g.genome_id] = (pid, op)
@@ -234,6 +330,7 @@ class GenesisLab:
         surp = self.surprise.score(V)
         stats = {"new_cells": 0, "map_inserts": 0, "anomalies": 0, "viable": 0}
         viable_ids, viable_vecs, viable_nov = [], [], []
+        w = self.weights()
         live_progress(phase=f"Geração {gen}: arquivos, novidade, espécies", done=0, total=len(genomes),
                       detail="MAP-Elites, novelty archive, zoo, linhagem, surpresa")
         for i_, (g, d, v, nv, sp) in enumerate(zip(genomes, descs, V, nov, surp)):
@@ -245,9 +342,10 @@ class GenesisLab:
             self.desc[gid] = d
             self.vec[gid] = v
             self.novelty_score[gid] = float(nv)
-            obj = quality_objectives(d, self.cfg.thresholds, self.probe_bonus(gid))
             viable = d["viability"] == "VIABLE"
-            q = float((obj * QUALITY_WEIGHTS).sum()) if viable else -1.0
+            lvl0 = self.ladder.evaluate(d, {}, False)[0] if viable else -1
+            obj = quality_objectives(d, self.cfg.thresholds, max(0, lvl0))
+            q = float((obj * w).sum()) if viable else -1.0
             self.objectives[gid] = obj if viable else obj * 0 - 1
             self.quality[gid] = q
             reward = 0.0
@@ -328,7 +426,7 @@ class GenesisLab:
             if d is None:
                 continue
             anomalous = any(e["genome_id"] == cid for e in self.anomalies.entries[-200:])
-            exps += self.scientist.propose(cid, d, self.status_of(cid), self.levels.get(cid, -1), anomalous, gen,
+            exps += self.scientist.propose(cid, d, self.status_current(cid), self.levels.get(cid, -1), anomalous, gen,
                                            self.vec.get(cid), is_top=cid in top)
         # replicação independente obrigatória para as descobertas mais relevantes (nível ≥ 3)
         ranked = sorted([c for c, l in self.levels.items() if l >= 3 and c in self.store],
@@ -343,9 +441,47 @@ class GenesisLab:
             k_ = self.scientist.key(cid, "replication", kw)
             if k_ in self.scientist.done or k_ in self.scientist.queued:
                 continue
-            exps.append(Experiment(cid, "replication", kw, 100.0 + self.levels[cid],
+            exps.append(Experiment(cid, "replication", kw, 40.0 + self.levels[cid],
                                    f"descoberta L{self.levels[cid]} -> replicação independente obrigatória", gen))
+        exps += self.focus_experiments(new_ids, gen)
         self.scientist.push(exps, gen)
+
+    def focus_experiments(self, new_ids: List[str], gen: int) -> List[Experiment]:
+        """Busca dirigida: os universos que mais se aproximam do próximo degrau (proxy do foco) são testados
+        DIRETAMENTE no probe desse degrau (fail-fast). Se passarem, os pré-requisitos baratos são testados em seguida
+        (regra do Scientist) e só então o nível é concedido — a escada continua sequencial e com controles."""
+        if not self.cfg.directed_search:
+            return []
+        focus = self.focus_level()
+        fprobe, key = FOCUS_PROBE.get(focus), FOCUS_PROXY_KEY.get(focus, "transmission")
+        if fprobe is None:
+            return []
+        pool = [c for c in dict.fromkeys(list(new_ids) + self.frontier(16))
+                if c in self.store and self.desc.get(c, {}).get("viability") == "VIABLE"]
+        pool.sort(key=lambda c: -float(self.desc[c].get(key, 0.0)))
+        out: List[Experiment] = []
+        for cid in pool:
+            if len(out) >= self.cfg.focus_tests_per_generation:
+                break
+            proxy = float(self.desc[cid].get(key, 0.0))
+            if proxy < 0.02:
+                break
+            st = self.status_current(cid)
+            if fprobe == "generalization":
+                kw = {"task": "xor" if st.get("transformation") == STATUS_PASS else "channel"}
+            elif fprobe == "replication":
+                kw = {"target": "channel", "n_seeds": self.cfg.probe.replication_seeds}
+            else:
+                kw = {}
+            skey = f"replication_{kw['target']}" if fprobe == "replication" else fprobe
+            if skey in st:
+                continue
+            k_ = self.scientist.key(cid, fprobe, kw)
+            if k_ in self.scientist.done or k_ in self.scientist.queued:
+                continue
+            out.append(Experiment(cid, fprobe, kw, 60.0 + 10.0 * proxy + max(0, self.levels.get(cid, 0)),
+                                  f"🎯 foco L{focus} {LEVEL_NAMES.get(focus)}: {key}={proxy:.2f} (teste direto do degrau)", gen))
+        return out
 
     def run_experiments(self, budget_s: float, max_n: int) -> int:
         t0 = time.time()
@@ -359,6 +495,8 @@ class GenesisLab:
             live_progress(phase=f"Geração {self.counters['generation']}: experimento {n + 1}/{max_n}", done=n, total=max_n,
                           detail=f"{e.probe} em {e.candidate_id} — {e.reason}")
             self.run_one_experiment(e)
+            if e.probe == FOCUS_PROBE.get(self.focus_level()) or e.reason.startswith("🎯"):
+                self.focus_tests_done += 1
             n += 1
         return n
 
@@ -392,7 +530,7 @@ class GenesisLab:
         cid = e.candidate_id
         if cid in self.desc:
             anomalous = any(x["genome_id"] == cid for x in self.anomalies.entries[-200:])
-            self.scientist.push(self.scientist.propose(cid, self.desc[cid], self.status_of(cid), self.levels.get(cid, -1),
+            self.scientist.push(self.scientist.propose(cid, self.desc[cid], self.status_current(cid), self.levels.get(cid, -1),
                                                        anomalous, self.counters["generation"], self.vec.get(cid)),
                                 self.counters["generation"])
         self.logger.event("experiment", candidate=e.candidate_id, probe=e.probe, status=res.status,
@@ -426,13 +564,17 @@ class GenesisLab:
         if cid in self.desc:
             self.zoo.add(cid, Zoo.classify(self.desc[cid], st, self.cfg.thresholds, anomalous), self.novelty_score.get(cid, 0.0), gen)
             if self.quality.get(cid, -1) >= 0:
-                obj = quality_objectives(self.desc[cid], self.cfg.thresholds, self.probe_bonus(cid))
-                self.objectives[cid] = obj
-                self.quality[cid] = float((obj * QUALITY_WEIGHTS).sum())
+                self.recompute_quality(cid)
                 self.map.try_insert(cid, self.desc[cid], self.quality[cid], gen)
         if level > old:
             self.audit.append({"candidate_id": cid, "from": old, "to": level, "evidence": ev, "result_id": res.result_id,
                                "generation": gen, "ts": iso_now(), "config_thresholds_hash": self.cfg.thresholds_hash()})
+            new_focus = min(9, max(self.focus, level + 1))
+            if new_focus > self.focus:
+                self.logger.event("focus", level=new_focus, name=LEVEL_NAMES.get(new_focus), candidate=cid)
+                self.focus = new_focus
+                self.stagnation["best_focus_proxy"] = 0.0
+                self.refresh_quality()
             if level >= 3 or (level >= 2 and level > self.best_level_global):
                 self.register_discovery(cid, old, level, res, ev)
         if level >= self.cfg.thresholds.champion_level - 2:
@@ -535,6 +677,10 @@ class GenesisLab:
         gen = self.counters["generation"]
         live_progress(phase=f"Geração {gen}: mutação/crossover", done=0, total=1,
                       detail=f"{self.cfg.population_size} filhos (operadores escolhidos pelo bandit)")
+        if self.cfg.directed_search:
+            self.rescreen_missing()
+            if self.focus_level() != self.focus:
+                self.refresh_quality()
         kids, meta = self.make_offspring(self.cfg.population_size)
         stats = self.evaluate_and_integrate(kids, meta)
         live_progress(phase=f"Geração {gen}: seleção e Scientist", done=0, total=1, detail="Pareto + novidade + espécies")
@@ -543,7 +689,9 @@ class GenesisLab:
         self.schedule_experiments([k.genome_id for k in kids])
         frac = self.cfg.experiment_time_fraction
         budget = frac / max(1e-6, 1 - frac) * stats["screen_seconds"]
+        ft0 = self.focus_tests_done
         stats["experiments"] = self.run_experiments(budget, self.cfg.max_experiments_per_generation)
+        stats["focus_tests"] = self.focus_tests_done - ft0
         self.check_stagnation_and_curriculum()
         self.check_metric_gaming()
         if gen % 5 == 0:
@@ -574,17 +722,29 @@ class GenesisLab:
                 "new_cells": stats.get("new_cells", 0), "experiments": stats.get("experiments", 0),
                 "mean_persistence": round(mean("persistence"), 4), "mean_causal": round(mean("causal_spread"), 4),
                 "mean_tc": round(mean("temporal_complexity"), 4), "stagnation_stage": self.stagnation["stage"],
-                "batch_size": self.cfg.batch_size, "universe_steps_per_s": round(self.throughput["universe_steps_per_s"], 1)}
+                "batch_size": self.cfg.batch_size, "universe_steps_per_s": round(self.throughput["universe_steps_per_s"], 1),
+                **self.focus_stats(stats)}
+
+    def focus_stats(self, stats: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        focus = self.focus_level()
+        key = FOCUS_PROXY_KEY.get(focus, "transmission")
+        vals = [float(self.desc[c].get(key, 0.0)) for c in self.population if c in self.desc]
+        return {"focus_level": focus, "focus_proxy_best": round(max(vals, default=0.0), 4),
+                "focus_proxy_mean": round(float(np.mean(vals)) if vals else 0.0, 4),
+                "focus_tests": (stats or {}).get("focus_tests", 0)}
 
     def check_stagnation_and_curriculum(self):
         s = self.stagnation
         bq = max([self.quality.get(c, -1) for c in self.population], default=-1)
         cov = self.map.coverage()
         bl = max(self.levels.values(), default=-1)
-        improved = bq > s["best_quality"] + 1e-3 or cov > s["best_coverage"] + 1e-9 or bl > s["best_level"]
+        fp = self.focus_stats()["focus_proxy_best"]
+        improved = (bq > s["best_quality"] + 1e-3 or cov > s["best_coverage"] + 1e-9 or bl > s["best_level"]
+                    or fp > s.get("best_focus_proxy", 0.0) + 1e-3)
         if improved:
             s.update({"best_quality": max(bq, s["best_quality"]), "best_coverage": max(cov, s["best_coverage"]),
-                      "best_level": max(bl, s["best_level"]), "since": 0})
+                      "best_level": max(bl, s["best_level"]), "since": 0,
+                      "best_focus_proxy": max(fp, s.get("best_focus_proxy", 0.0))})
             if s["stage"] > 0:
                 s["stage"] -= 1
             s["sigma_mult"] = max(1.0, s["sigma_mult"] * 0.9)
@@ -686,6 +846,7 @@ class GenesisLab:
             "history": self.history[-5000:], "stagnation": self.stagnation, "curriculum": dict(self.curriculum),
             "envs": [e.to_dict() for e in self.envs], "metric_flags": self.metric_flags,
             "best_level_global": self.best_level_global, "rng": rng_state(), "changelog": GENESIS_CHANGELOG,
+            "focus": self.focus, "focus_tests_done": self.focus_tests_done, "migrations": self.migrations,
         }
 
     def load_state_dict(self, s: dict):
@@ -706,6 +867,8 @@ class GenesisLab:
         self.curriculum.clear(); self.curriculum.update(s["curriculum"])
         self.envs[:] = [Environment(**e) for e in s["envs"]]
         self.metric_flags = s.get("metric_flags", []); self.best_level_global = s.get("best_level_global", -1)
+        self.focus_tests_done = int(s.get("focus_tests_done", 0))
+        self.migrations = list(s.get("migrations", []))
         self.runtime_at_start = float(self.counters.get("total_runtime", 0.0))
         self.session_start = time.time()
         r = s["rng"]
@@ -717,6 +880,8 @@ class GenesisLab:
                 torch.cuda.set_rng_state_all(r["torch_cuda"])
             except Exception as e:
                 self.logger.event("cuda_rng_restore_failed", echo=True, error=repr(e))
+        self.refresh_quality()           # objetivos/pesos da versão atual (inclui foco dirigido)
+
 
     def save_checkpoint(self, reason: str = "periodic") -> str:
         live_progress(phase="Salvando checkpoint", done=0, total=1, detail=f"{reason} → {self.paths.checkpoints}")

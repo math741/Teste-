@@ -302,7 +302,10 @@ class LiveMonitor:
             self._tile("Velocidade", f"{_human(self.speed)}/s", f"média {_human(avg_speed)}/s"),
             self._tile("Melhor nível", _level_badge(best_lv), f"recorde L{lab.best_level_global}"),
             self._tile("Descobertas", f"{c['discovery_events']:,}", f"experimentos {c['experiments']:,}"),
-            self._tile("Fila do Scientist", f"{len(lab.scientist.queue):,}", "experimentos pendentes"),
+            self._tile("🎯 Foco (próximo degrau)", _level_badge(lab.focus_level()) if lab.cfg.directed_search else "aberta",
+                       f"medida {_esc(lab.focus_key())}: {lab.focus_stats()['focus_proxy_best']:.2f}" if lab.cfg.directed_search
+                       else "busca não dirigida"),
+            self._tile("Fila do Scientist", f"{len(lab.scientist.queue):,}", f"testes do foco: {lab.focus_tests_done:,}"),
             self._tile("Espécies", f"{len(lab.species.reps):,}", f"{len(lab.species.extinct):,} extintas"),
             self._tile("MAP-Elites", f"{lab.map.coverage():.1%}", f"{len(lab.map.cells)} células"),
             self._tile("Anomalias", f"{len(lab.anomalies.entries):,}", f"falhas arquivadas {len(lab.failures.entries):,}"),
@@ -322,6 +325,15 @@ class LiveMonitor:
                    '<div style="width:100%;background:#1f6feb55;height:10px;border-radius:6px"></div></div>')
             prog = "em andamento"
         phase_steps = self.lab.sim.steps_done - self.phase_steps0
+        directed = ""
+        if lab.cfg.directed_search:
+            fl = lab.focus_level()
+            pst = lab.scientist.stats.get(FOCUS_PROBE.get(fl, ""), {"n": 0, "pass": 0})
+            directed = (f'<div style="margin:6px 0;padding:5px 8px;border:1px solid #1f6feb;border-radius:8px;background:#0c2d6b55">'
+                        f'🎯 <b>Busca dirigida</b> — foco <b>L{fl} {_esc(LEVEL_NAMES.get(fl, ""))}</b> '
+                        f'(probe <b>{_esc(FOCUS_PROBE.get(fl, "-"))}</b>: {pst["n"]} testes, {pst["pass"]} PASS) · '
+                        f'medida graduada <b>{_esc(lab.focus_key())}</b>: melhor {lab.focus_stats()["focus_proxy_best"]:.2f} '
+                        f'· {len(lab.frontier(16))} universos na fronteira geram ~{int(100 * max(0.2, 0.5 - 0.06 * lab.stagnation["stage"]))}% dos filhos</div>')
         events = self._events_html()
         where = f"{_esc(lab.paths.checkpoints)} ({'Google Drive' if lab.paths.on_drive else 'disco local do Colab'})"
         return (f'<div style="{_ROOT}">'
@@ -332,12 +344,13 @@ class LiveMonitor:
                 f'<div style="{_MUTED}">sessão {fmt_hms(now - lab.session_start)} · tempo total {fmt_hms(lab.runtime_total())} · '
                 f'sessão nº {c["sessions"]} · <b style="color:{st_col}">{_esc(self.status)}</b></div></div>'
                 f'<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(138px,1fr));gap:6px;margin:10px 0">{tiles}</div>'
-                f'<div>▶ <b>{_esc(self.phase)}</b> <span style="{_MUTED}">{_esc(self.detail)}</span></div>{bar}'
+                f'{directed}<div>▶ <b>{_esc(self.phase)}</b> <span style="{_MUTED}">{_esc(self.detail)}</span></div>{bar}'
                 f'<div style="{_MUTED}font-size:11px">{prog} · {fmt_hms(now - self.phase_t0)} nesta fase · '
                 f'{_human(phase_steps)} universo·passos nesta fase</div>'
                 f'<div style="margin-top:8px">{events}</div>'
                 f'<div style="{_MUTED}font-size:11px;margin-top:8px;border-top:1px solid #21262d;padding-top:6px">'
-                f'💾 {where} · ⏸ pausar: botão ■ da célula (salva tudo) · ▶ continuar: rode esta célula de novo '
+                f'💾 {where} · física {"v2 (taxa local)" if lab.cfg.local_rate_limit else "v1 (dt global)"} · '
+                f'⏸ pausar: botão ■ da célula (salva tudo) · ▶ continuar: rode esta célula de novo '
                 f'(ou Executar tudo) — a pesquisa retoma do último checkpoint</div></div>')
 
     def _events_html(self) -> str:
@@ -462,6 +475,7 @@ class LiveMonitor:
             svg_spark(col("best_quality"), "melhor fitness", "#58a6ff"),
             svg_spark(col("map_coverage"), "cobertura MAP-Elites", "#3fb950", "{:.1%}"),
             svg_spark(col("best_level"), "melhor nível", "#ffd33d", "{:.0f}"),
+            svg_spark(col("focus_proxy_best"), "medida do foco (melhor)", "#1f6feb"),
             svg_spark(col("species"), "espécies", "#a371f7", "{:.0f}"),
             svg_spark(col("viable_fraction"), "fração viável", "#f0883e", "{:.1%}"),
             svg_spark(list(self.speed_hist), "velocidade (u·passos/s)", "#8b949e", "{:,.0f}"),

@@ -61,12 +61,17 @@ except Exception:
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
-GENESIS_VERSION = "1.0.0"
-CHECKPOINT_VERSION = 1
-VALIDATION_ENGINE_VERSION = "VE-1.0"
+GENESIS_VERSION = "1.1.0"
+CHECKPOINT_VERSION = 2
+VALIDATION_ENGINE_VERSION = "VE-1.1"
 GENESIS_CHANGELOG = [
     ("1.0.0", "Primeira versão completa: física contínua multicanal evoluível, QD (MAP-Elites + novelty + especiação), "
               "Validation Engine congelado com controles, Scientist por valor de informação, checkpoints atômicos."),
+    ("1.1.0", "Busca dirigida pela escada: triagem com trio contrafactual (base, +P, −P em A) mede traço de memória, "
+              "transmissão A→B reprodutível e não linearidade; o fitness pesa o próximo degrau (foco); pais da fronteira; "
+              "teste direto do degrau-alvo (fail-fast). Canal com geometria compartilhada e distância inicial de "
+              "currículo 12 em RESEARCH/FAST/EXTREME (probes 1.1). Painel mostra o foco. Física v2 para pesquisas novas: "
+              "limite de taxa local por célula no lugar do dt adaptativo global (pesquisas antigas mantêm a física v1)."),
 ]
 
 STATUS_NOT_TESTED, STATUS_RUNNING, STATUS_PASS, STATUS_FAIL, STATUS_INCONCLUSIVE, STATUS_ERROR = (

@@ -469,11 +469,19 @@ class Simulator:
             if hit_np.any():
                 hit = torch.as_tensor(hit_np, device=self.device, dtype=torch.float32).view(B, 1, 1, 1)
                 dU = dU + hit * st.shock_amp * self._grand(st, (C, S, S))
-        # dt adaptativo (salvaguarda numérica externa)
-        amax = dU.abs().amax(dim=(1, 2, 3), keepdim=True)
-        scale = torch.clamp(gb.max_rate / (amax + 1e-12), max=1.0)
-        dU = dU * scale
-        st.dt_scale_sum = st.dt_scale_sum + scale.view(B)
+        if self.cfg.local_rate_limit:
+            # limite LOCAL de taxa (criação/aniquilação limitada por célula, suave e ímpar): nenhuma célula pode
+            # alterar o passo do universo inteiro — sem acoplamento global instantâneo
+            r_ = gb.max_rate
+            dU = r_ * torch.tanh(dU / r_)
+            st.dt_scale_sum = st.dt_scale_sum + 1.0
+        else:
+            # dt adaptativo global (física v1, mantida para pesquisas antigas): o passo de cada universo encolhe
+            # quando qualquer célula excede max_rate — salvaguarda numérica que introduz acoplamento global
+            amax = dU.abs().amax(dim=(1, 2, 3), keepdim=True)
+            scale = torch.clamp(gb.max_rate / (amax + 1e-12), max=1.0)
+            dU = dU * scale
+            st.dt_scale_sum = st.dt_scale_sum + scale.view(B)
         if gb.has_async:
             m = (self._grand(st, (1, S, S), "uniform") < gb.async_p).float()
             dU = dU * m

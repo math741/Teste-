@@ -13,9 +13,14 @@ Um único notebook para Google Colab: **[`GENESIS_OMEGA.ipynb`](GENESIS_OMEGA.ip
    universos sendo simulados naquele instante, fase com barra de progresso, contadores e velocidade, melhor candidato
    com scorecard, anúncios de descoberta, eventos recentes e gráficos por geração (convergência, MAP-Elites, escada,
    zoológico). Não é preciso parar nada para ver resultados.
-4. A pesquisa roda até o Colab encerrar a sessão, com checkpoint a cada poucos minutos. Pausar: botão ■ da célula
+4. **Busca dirigida pela escada** (padrão, `DIRECTED_SEARCH`): o laboratório mira o degrau logo acima do melhor
+   nível alcançado. A triagem aplica +P e −P na região A e mede, na região B, transmissão reprodutível,
+   não linearidade e traço de memória; o fitness pesa a medida do degrau-alvo, metade dos pais vem da fronteira
+   (validados mais altos + mais próximos do próximo degrau) e os melhores são testados direto no probe do degrau
+   (fail-fast). Os níveis continuam sendo concedidos só pelos probes com controles, na ordem da escada.
+5. A pesquisa roda até o Colab encerrar a sessão, com checkpoint a cada poucos minutos. Pausar: botão ■ da célula
    (salva tudo). Continuar: rodar a célula de novo (mesma sessão) ou `Executar tudo` (sessão nova).
-5. Parada limpa alternativa: criar o arquivo `STOP` em `MyDrive/GENESIS_OMEGA/`.
+6. Parada limpa alternativa: criar o arquivo `STOP` em `MyDrive/GENESIS_OMEGA/`.
 
 No Colab o código fica escondido atrás dos títulos das seções (duplo clique mostra) e as configurações aparecem
 como formulário na primeira célula.
@@ -30,9 +35,10 @@ Sem GPU o notebook roda em modo `DEBUG` (mundo 32², população 24).
 | Genoma | ~45 genes de leis + parâmetros de mutação auto-adaptativos; mutações gaussianas, fortes, estruturais (duplicar/remover canal, kernel), temporais, topológicas, crossover; bandit UCB de operadores |
 | Quality-Diversity | MAP-Elites, novelty search, especiação genótipo+fenótipo, zoo (STATIC … UNKNOWN, ANOMALOUS), arquivos de anomalias/falhas/campeões, linhagem, surpresa |
 | Validation Engine (VE-1.0) | causalidade contrafactual, memória M(T), canal (MI, latência, capacidade), transformação (XOR), composição (paridade), generalização (não vistos), dano/recuperação, robustez (8 perturbações), adaptação, replicação, ablação, análise avançada (TE, Granger, lei efetiva, PCA, atratores, objetos, fase, histerese) |
+| Busca dirigida | foco no próximo degrau, medidas graduadas de sinal na triagem (trio contrafactual base/+P/−P), pais da fronteira, teste direto do degrau-alvo, pré-requisitos em seguida |
 | Scientist | regras + valor de informação, sem p-hacking, cache, exploração/aprofundamento, ChampionLab em holdout com dominância estatística |
 | Painel ao vivo | atualização a cada 1 s sem piscar (display handles), mosaico dos universos do lote atual, progresso por fase, melhor candidato, eventos, gráficos SVG; recriado periodicamente para sobreviver a recarregamentos da página; linha de status fora de notebook |
-| Infra | auto-tuning de VRAM, teste de precisão e `torch.compile`, recuperação de OOM, checkpoint atômico com hash e fallback, migração, Drive, dashboard, relatórios, evidence bundles, 18 testes de boot com controles +/− |
+| Infra | auto-tuning de VRAM, teste de precisão e `torch.compile`, recuperação de OOM, checkpoint atômico com hash e fallback, migração, Drive, dashboard, relatórios, evidence bundles, 19 testes de boot com controles +/− |
 
 ## Desenvolvimento
 
@@ -45,4 +51,4 @@ GENESIS_ROOT=./run GENESIS_MAX_GENERATIONS=3 python genesis.py   # execução lo
 ```
 
 Variáveis de ambiente úteis: `GENESIS_PROFILE` (AUTO|DEBUG|FAST|RESEARCH|EXTREME), `GENESIS_MAX_HOURS`,
-`GENESIS_MAX_GENERATIONS`, `GENESIS_LIVE_SECONDS`, `GENESIS_USE_DRIVE`, `GENESIS_FORCE_NEW`, `GENESIS_RUN_TESTS`, `GENESIS_START_RESEARCH`.
+`GENESIS_MAX_GENERATIONS`, `GENESIS_LIVE_SECONDS`, `GENESIS_DIRECTED`, `GENESIS_USE_DRIVE`, `GENESIS_FORCE_NEW`, `GENESIS_RUN_TESTS`, `GENESIS_START_RESEARCH`.

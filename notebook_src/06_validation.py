@@ -58,9 +58,11 @@ class TestResult:
 
 class ValidationEngine:
     VERSION = VALIDATION_ENGINE_VERSION
-    PROBE_VERSIONS = {"causality": "1.0", "memory": "1.0", "channel": "1.0", "transformation": "1.0",
-                      "composition": "1.0", "generalization": "1.0", "recovery": "1.0", "robustness": "1.0",
-                      "adaptation": "1.0", "replication": "1.0", "ablation": "1.0", "long_screen": "1.0",
+    # 1.1: canal/transformação/composição/generalização/adaptação usam a geometria A→B compartilhada com a triagem,
+    #      com distância inicial de currículo menor (sobe +2 a cada 5 canais encontrados)
+    PROBE_VERSIONS = {"causality": "1.0", "memory": "1.0", "channel": "1.1", "transformation": "1.1",
+                      "composition": "1.1", "generalization": "1.1", "recovery": "1.0", "robustness": "1.0",
+                      "adaptation": "1.1", "replication": "1.0", "ablation": "1.0", "long_screen": "1.0",
                       "advanced": "1.0"}
 
     def __init__(self, sim: Simulator, cfg: GenesisConfig, envs: List[Environment], screener: Screener,
@@ -77,8 +79,7 @@ class ValidationEngine:
         return e if e else [x for x in self.envs if x.split == "evolution"]
 
     def channel_distance(self, S: int) -> int:
-        d = int(self.ps.channel_distance + self.curriculum.get("channel_distance_add", 0))
-        return int(max(2 * self.ps.stim_radius + 2, min(d, S // 2 - self.ps.obs_radius - 1)))
+        return channel_geometry(S, self.ps, self.curriculum)[0]
 
     def memory_delays(self) -> List[int]:
         mult = self.curriculum.get("memory_delay_mult", 1.0)
@@ -123,10 +124,7 @@ class ValidationEngine:
 
     @staticmethod
     def _pattern(rng: np.random.Generator, C: int, r: int) -> np.ndarray:
-        yy, xx = np.mgrid[-r:r + 1, -r:r + 1]
-        disk = ((yy ** 2 + xx ** 2) <= r * r + 0.5).astype(np.float32)
-        p = rng.choice([-1.0, 1.0], size=(C, 2 * r + 1, 2 * r + 1)).astype(np.float32)
-        return p * disk[None]
+        return make_pattern(rng, C, r)
 
     def _stim_field(self, B: int, C: int, S: int, items: List[Tuple[int, np.ndarray, int, int, float]]) -> np.ndarray:
         fld = np.zeros((B, C, S, S), np.float32)
@@ -349,9 +347,7 @@ class ValidationEngine:
     # LEVEL 4 — CANAL
     # ------------------------------------------------------------------
     def _channel_geometry(self, S: int):
-        d = self.channel_distance(S)
-        c = S // 2
-        return d, (c, c - d // 2), (c, c - d // 2 + d)
+        return channel_geometry(S, self.ps, self.curriculum)      # mesma geometria usada na triagem
 
     def probe_channel(self, genome: Genome, seed: int, split: str = "evolution", trials: Optional[int] = None,
                       noise_level: float = 0.0, pre_damage: float = 0.0, S: Optional[int] = None,
@@ -723,7 +719,7 @@ class ValidationEngine:
         gl = [r_[0] for r_ in rows]
         # reutiliza o pipeline de triagem com sementes fixas por réplica
         out = []
-        per = max(1, self.cfg.batch_size // 2)
+        per = max(1, self.cfg.batch_size // 3)
         for c0 in range(0, len(rows), per):
             chunk = rows[c0:c0 + per]
             jobs = [(j, e, s) for j, (_, e, s) in enumerate(chunk)]
