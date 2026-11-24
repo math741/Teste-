@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>Genesis World</title>
+<link rel="stylesheet" href="/static/style.css?v=__VERSION__">
+<script type="importmap">
+{ "imports": { "three": "/vendor/three.module.js", "three/addons/": "/vendor/" } }
+</script>
+</head>
+<body>
+<div id="loading">
+  <div class="logo"><div class="ring r1"></div><div class="ring r2"></div><div class="ring r3"></div><div class="core"></div></div>
+  <div class="lt">GENESIS CIVILIZATION Ω∞</div>
+  <div class="ls" id="loadmsg">conectando ao universo…</div>
+</div>
+<canvas id="world"></canvas>
+
+<header id="topbar">
+  <div class="chip live" id="live" title="estado do stream: LIVE = dados atualizados agora"><span class="dot"></span><b id="livetxt">…</b></div>
+  <div class="chip" title="estado do laboratório"><i>◆</i><span id="state">—</span></div>
+  <div class="chip" title="tempo do mundo em ticks (unidade artificial) e velocidade"><i>⏱</i><span id="tick">0</span><small id="tps"></small></div>
+  <div class="chip" title="população viva (F1–F4) + agregada (F0)"><i>●</i><span id="pop">0</span><small id="f0"></small></div>
+  <div class="chip" title="geração máxima viva · gerações QD"><i>⟳</i><span id="gen">0</span></div>
+  <div class="chip ladders" id="ladderchip" title="Discovery Levels: H (desenvolvimento/mente), A (afeto funcional), C (civilização)">
+    <svg id="rings" width="64" height="28"></svg><span id="levels">—</span>
+  </div>
+  <div class="chip" title="memória da GPU (alocada / total)"><i>▣</i><span id="gpu">—</span></div>
+  <div class="chip" title="último checkpoint persistido"><i>⛁</i><span id="ckpt">—</span></div>
+  <div class="chip small" title="latência viewer ↔ backend · idade do último frame"><span id="lat">—</span></div>
+  <div class="spacer"></div>
+  <input id="search" placeholder="⌕ agente / assentamento / D… / C…" autocomplete="off" spellcheck="false">
+  <button class="ib" id="btn-help" title="ajuda e legendas">?</button>
+</header>
+
+<nav id="modes">
+  <button data-mode="planet" class="on" title="Câmera planetária">🌍</button>
+  <button data-mode="city" title="Câmera cidade: maior assentamento detectado">🏙</button>
+  <button data-mode="street" title="Câmera rua: perto das construções">🧱</button>
+  <button data-mode="agent" title="Câmera agente: seguir o selecionado">🎯</button>
+  <button data-mode="body" title="Corpo (Matter Nodes, raio-X)">🧬</button>
+  <button data-mode="signal" title="Sinais internos do corpo">⚡</button>
+  <button data-mode="development" title="Replay do desenvolvimento (semente → corpo)">🌱</button>
+  <button data-mode="social" title="Conexões sociais medidas">🕸</button>
+  <button data-mode="culture" title="Tipos culturais (camada)">🎨</button>
+  <button data-mode="affect" title="Afeto FUNCIONAL (só eixos validados; overlay científico)">◐</button>
+  <button data-mode="lab" title="Câmera do cientista: experimento em curso">🔬</button>
+  <button id="btn-xr" title="Entrar em VR (WebXR)" style="display:none">🥽</button>
+</nav>
+
+<aside id="layers" class="panel mini">
+  <div class="ph">camadas</div>
+  <div id="layerbtns"></div>
+</aside>
+
+<aside id="inspector" class="panel hidden">
+  <div class="ph"><span id="ins-title">agente</span><button class="ib" id="ins-close">×</button></div>
+  <canvas id="bodycv" width="300" height="220"></canvas>
+  <div class="row tabs" id="bodytabs">
+    <button data-v="xray" class="on" title="raio-X: nós coloridos pela propriedade escolhida">raio-X</button>
+    <button data-v="signal" title="estado de sinal por nó">sinal</button>
+    <button data-v="dev" title="replay do desenvolvimento">desenv.</button>
+  </div>
+  <input type="range" id="devslider" min="0" max="10" value="10" class="hidden" title="passo do desenvolvimento">
+  <div id="ins-body" class="kv"></div>
+  <div class="bars" id="ins-bars"></div>
+  <div class="sub">estado interno (unidades × tempo)</div>
+  <canvas id="statecv" width="300" height="70" title="heatmap temporal do estado interno (não implica mente consciente)"></canvas>
+  <div id="ins-affect" class="badge-row"></div>
+  <div class="sub">linhagem</div>
+  <svg id="lineage" width="300" height="90"></svg>
+  <div id="ins-tech" class="badge-row"></div>
+  <div class="row">
+    <button id="ins-follow">seguir</button><button id="ins-fav">★ marcar</button><button id="ins-promote" title="admin: promover a F4 (registrado como intervenção)">F4</button>
+  </div>
+</aside>
+
+<aside id="cityp" class="panel hidden">
+  <div class="ph"><span id="city-title">assentamento</span><button class="ib" id="city-close">×</button></div>
+  <svg id="citychart" width="300" height="110"></svg>
+  <div id="city-kv" class="kv"></div>
+</aside>
+
+<aside id="labp" class="panel hidden">
+  <div class="ph"><span id="lab-title">laboratório</span><button class="ib" id="lab-close">×</button></div>
+  <canvas id="labcv" width="300" height="300"></canvas>
+  <div id="lab-kv" class="kv"></div>
+</aside>
+
+<div id="feed"></div>
+
+<div id="replay" class="modal hidden">
+  <div class="mbox">
+    <div class="ph"><span id="rp-title">replay</span><button class="ib" id="rp-close">×</button></div>
+    <canvas id="rpcv" width="640" height="420"></canvas>
+    <input type="range" id="rpslider" min="0" max="100" value="0">
+    <div id="rp-kv" class="kv"></div>
+  </div>
+</div>
+
+<div id="help" class="modal hidden">
+  <div class="mbox help">
+    <div class="ph"><span>GENESIS WORLD · legenda</span><button class="ib" id="help-close">×</button></div>
+    <div id="helpbody"></div>
+  </div>
+</div>
+
+<footer id="timeline">
+  <button class="ib" id="tl-live" title="voltar ao vivo">●</button>
+  <div id="tl-track"><div id="tl-events"></div><input type="range" id="tl" min="0" max="0" value="0"></div>
+  <div id="scale" title="barra de escala (tiles) e escala temporal">—</div>
+  <button class="ib" id="btn-tour" title="Discovery Tour">✦</button>
+  <button class="ib" id="btn-shot" title="capturar imagem">◉</button>
+  <button class="ib" id="btn-sci" title="modo ciência (sem efeitos) ↔ cinema">◈</button>
+  <button class="ib" id="btn-pal" title="paleta acessível">◑</button>
+</footer>
+
+<div id="offline" class="hidden"></div>
+<script type="module" src="/static/app.js?v=__VERSION__"></script>
+</body>
+</html>

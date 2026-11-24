@@ -1,3 +1,32 @@
+# PROJECT GENESIS — laboratórios de universos artificiais
+
+## NOVO: GENESIS CIVILIZATION Ω∞ — **[`GENESIS_CIVILIZATION_OMEGA.ipynb`](GENESIS_CIVILIZATION_OMEGA.ipynb)**
+
+Universo artificial 3D multiescala + observatório 3D ao vivo (Three.js) + laboratório científico com controles.
+**É um universo artificial, não uma simulação atomística do Universo real; nada aqui afirma vida real, consciência,
+sentimentos subjetivos, AGI ou humanidade real.**
+
+1. Colab → `Ambiente de execução → Alterar tipo → GPU` (A100 recomendado; sem GPU roda em DEBUG na CPU).
+2. `Ambiente de execução → Executar tudo`. Autorize o Google Drive (persistência em `MyDrive/GENESIS_CIVILIZATION_OMEGA`).
+3. No fim do boot aparece **🌍 OPEN GENESIS WORLD** (viewer embutido no Colab) e um **link remoto HTTPS** (Cloudflare
+   quick tunnel; ngrok se `NGROK_AUTHTOKEN` estiver em Colab Secrets) para abrir no celular ou em outro computador.
+   O link remoto é somente leitura; o token é aleatório por sessão e fica só no fragmento `#` da URL.
+4. A pesquisa roda sozinha até o Colab encerrar (checkpoint atômico periódico). Próxima sessão: `Executar tudo` →
+   o **mesmo** mundo é retomado (idade, agentes, cultura, assentamentos, fila científica, história).
+
+O que existe (código em `civ_src/`, montado por `build_civ_notebook.py`): mundo procedural com relevo, rios, clima,
+dia/noite, estações e tempestades · matéria manipulável e construção (sem `build_house()`) · DevelopmentGenome
+(semente → corpo em Matter Nodes) · física massa-mola na GPU · substrato de sinais com plasticidade evoluível ·
+agentes F0–F4 com promoção/rebaixamento e teste de consistência multiescala · afeto funcional A0–A9 com ablação causal
+e Ethical Sentinel · grafo social, comunicação (MI com nulos), cultura e grafo de conhecimento · detecção de
+assentamentos, cidades, estradas, trocas e normas · escadas H0–H12 e C0–C9 · ilhas QD (MAP-Elites, novidade, Pareto,
+bandit, estagnação) com busca dirigida ao próximo nível · Scientist com fila limitada, replicação em sementes de
+holdout, Pantheon revogável e DSL segura · forks contrafactuais A/B · checkpoints com shards, manifesto e SHA-256 ·
+servidor FastAPI/WebSocket (msgpack) com tokens e rate limit · observatório 3D (câmeras planeta/cidade/rua/agente/
+corpo/sinal/desenvolvimento/social/cultura/afeto/laboratório, timeline, replays, camadas, WebXR, modo celular).
+
+---
+
 # PROJECT GENESIS Ω — Universal Computation Discovery Laboratory
 
 Um único notebook para Google Colab: **[`GENESIS_OMEGA.ipynb`](GENESIS_OMEGA.ipynb)**.
