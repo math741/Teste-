@@ -61,6 +61,15 @@ class RealtimeServer:
     # ------------------------------------------------------------------ auth
     @staticmethod
     def _via_tunnel(headers) -> bool:
+        """Requisição chegou pelo túnel público? (Cloudflare/ngrok). O proxy autenticado do Colab também pode mandar
+        X-Forwarded-For, mas serve só o navegador do próprio usuário — não é tratado como acesso remoto."""
+        host = headers.get("host", "").split(":")[0].lower()
+        if any(h in headers for h in ("cf-connecting-ip", "cf-ray", "cf-ipcountry")) or any(k.lower().startswith("ngrok") for k in headers.keys()):
+            return True
+        if host.endswith((".trycloudflare.com", ".ngrok-free.app", ".ngrok.app", ".ngrok.io", ".ngrok.dev", ".ngrok-free.dev")):
+            return True
+        if host.endswith((".googleusercontent.com", ".colab.dev")) or host in ("127.0.0.1", "localhost"):
+            return False
         return any(h in headers for h in PROXY_HEADERS)
 
     def _token_ok(self, tok: Optional[str], admin: bool = False) -> bool:

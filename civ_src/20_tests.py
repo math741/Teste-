@@ -100,9 +100,10 @@ class BootTests:
         pos = torch.rand(300, 2, generator=g, device=self.device) * 40
         alive = torch.ones(300, dtype=torch.bool, device=self.device)
         nn, nd, _ = spatial_neighbors(pos, alive, 4.0, M=64)
-        D = torch.cdist(pos, pos); D.fill_diagonal_(1e9)
+        # referência EXATA (diferenças elemento a elemento; torch.cdist usa matmul e perde precisão em float32 na GPU)
+        D = (pos[:, None, :] - pos[None, :, :]).norm(dim=-1); D.fill_diagonal_(1e9)
         bd, bi = D.min(1)
-        ok = (bd > 4.0) | (bi == nn) | ((nd - bd).abs() < 1e-5)
+        ok = (bd > 4.0) | (bi == nn) | ((nd - bd).abs() <= 1e-4 * (1 + bd))
         assert bool(ok.all()), "hash espacial divergiu da força bruta"
         return {"pairs_checked": 300}
 
@@ -167,11 +168,11 @@ class BootTests:
         return {"accepted_steps": len(ok["steps"]), "rejected": len(bad)}
 
     # ------------------------------------------------------------------ integração: universo, checkpoint, observação
-    def _small_universe(self, root: str):
+    def _small_universe(self, root: str, device: Optional[torch.device] = None):
         p = CivPaths(root, os.path.join(root, "_work"), on_drive=False)
         cfg = copy.deepcopy(self.cfg)
         cfg.n_islands, cfg.island_pop, cfg.qd_batch = 1, 6, 6
-        u = UniverseEngine(cfg, p, self.device, None)
+        u = UniverseEngine(cfg, p, device or self.device, None)
         u.create_world(bootstrap_seconds=0.5)
         return u, p
 
@@ -199,12 +200,15 @@ class BootTests:
         return {"fallback_to_tick": t_first, "tried": [t["dir"] for t in info2["tried"]]}
 
     def test_observation_independence(self):
-        """O observador (telemetria + gêmeo visual + camadas) não altera o estado nem o RNG da simulação."""
+        """O observador (telemetria + gêmeo visual + camadas) não altera o estado nem o RNG da simulação.
+        Roda na CPU (bit-a-bit determinística): na GPU, somas atômicas (index_add_) já divergem sem observador nenhum,
+        o que mascararia o efeito testado. A lógica do observador é a mesma em qualquer dispositivo."""
+        cpu = torch.device("cpu")
         root = tempfile.mkdtemp(prefix="gtest_obs_", dir=self.paths.tmp(""))
-        u, p = self._small_universe(root)
+        u, p = self._small_universe(root, cpu)
         st = u.state_dict()
-        ua = UniverseEngine(u.cfg, p, self.device, None); ua.load_state_dict(copy.deepcopy(st))
-        ub = UniverseEngine(u.cfg, p, self.device, None); ub.load_state_dict(copy.deepcopy(st))
+        ua = UniverseEngine(u.cfg, p, cpu, None); ua.load_state_dict(copy.deepcopy(st))
+        ub = UniverseEngine(u.cfg, p, cpu, None); ub.load_state_dict(copy.deepcopy(st))
         desk = ObserverDesk(); tel = TelemetryEngine(ub, desk)
         desk.layers["t"] = "population"
         aid = int(ub.pool.aid[ub.pool.alive][0]); desk.selected["t"] = aid
@@ -216,21 +220,22 @@ class BootTests:
         return {"ticks": 30, "frames": tel.frames_sent}
 
     def test_replay_determinism(self):
+        """Replay checkpoint + semente → mesma trajetória (CPU, bit-a-bit). Na GPU, kernels com soma atômica
+        (index_add_/scatter) são registrados como não determinísticos bit-a-bit (ver relatório/limitações)."""
+        cpu = torch.device("cpu")
         root = tempfile.mkdtemp(prefix="gtest_det_", dir=self.paths.tmp(""))
-        u, p = self._small_universe(root)
+        u, p = self._small_universe(root, cpu)
         st = u.state_dict()
         hashes = []
         for _ in range(2):
-            v = UniverseEngine(u.cfg, p, self.device, None); v.load_state_dict(copy.deepcopy(st))
+            v = UniverseEngine(u.cfg, p, cpu, None); v.load_state_dict(copy.deepcopy(st))
             for _ in range(25):
                 v.tick()
             hashes.append(hash_obj(v.pool.pos[v.pool.alive].cpu().numpy()))
         shutil.rmtree(root, ignore_errors=True)
-        same = hashes[0] == hashes[1]
-        if self.device.type == "cuda" and not same:
-            return {"deterministic": False, "note": "kernels CUDA não determinísticos (index_add atômico) registrados"}
-        assert same, "replay a partir do mesmo checkpoint divergiu"
-        return {"deterministic": True}
+        assert hashes[0] == hashes[1], "replay a partir do mesmo checkpoint divergiu"
+        note = "GPU: index_add_/scatter usam somas atômicas (não bit-a-bit determinísticas)" if self.device.type == "cuda" else ""
+        return {"deterministic_cpu": True, "note": note}
 
     def test_multiscale_aggregation_bookkeeping(self):
         root = tempfile.mkdtemp(prefix="gtest_f0_", dir=self.paths.tmp(""))
@@ -288,9 +293,9 @@ class BootTests:
             assert code("/api/admin/pause", {"X-Genesis-Admin": srv.admin_token}, b"{}") == 200
             assert code("/static/../../etc/passwd") in (404, 422), "path traversal"
             assert code("/api/agent/-5", {"X-Genesis-Token": srv.view_token}) == 422
-            got = asyncio.run(self._ws_probe(port, srv.view_token))
+            got = run_async_isolated(self._ws_probe(port, srv.view_token))
             assert got["hello"] and got["binary"] >= 1, f"WebSocket não entregou hello/base: {got}"
-            bad = asyncio.run(self._ws_probe(port, "wrong-token"))
+            bad = run_async_isolated(self._ws_probe(port, "wrong-token"))
             assert not bad["hello"], "WebSocket aceitou token errado"
         finally:
             srv.stop()
@@ -315,6 +320,24 @@ class BootTests:
         except Exception as e:
             out["error"] = repr(e)
         return out
+
+
+def run_async_isolated(coro, timeout: float = 30.0):
+    """Executa uma corrotina num event loop próprio em outra thread (Jupyter/Colab já têm um loop rodando)."""
+    box: Dict[str, Any] = {}
+
+    def target():
+        try:
+            box["result"] = asyncio.run(coro)
+        except Exception as e:
+            box["error"] = e
+    th = threading.Thread(target=target, daemon=True, name="genesis-async-test")
+    th.start(); th.join(timeout)
+    if "error" in box:
+        raise box["error"]
+    if "result" not in box:
+        raise TimeoutError("corrotina não terminou a tempo")
+    return box["result"]
 
 
 def oom_backoff(cfg: CivConfig) -> CivConfig:
