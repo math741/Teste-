@@ -186,7 +186,7 @@ function drawSettlements(list) {
 }
 
 // ------------------------------------------------------------------ agentes (instancing + interpolação entre snapshots)
-const agentGeo = new THREE.OctahedronGeometry(0.34, 0); agentGeo.scale(1.5, 0.85, 0.95);
+const agentGeo = new THREE.OctahedronGeometry(0.5, 0); agentGeo.scale(1.5, 0.9, 1.0);
 const agentMat = new THREE.MeshStandardMaterial({ roughness: 0.45, metalness: 0.1, emissive: 0x000000 });
 let agents = new THREE.InstancedMesh(agentGeo, agentMat, 32); agents.count = 0; agents.frustumCulled = false; world.add(agents);
 const A = { n: 0, ids: new Float64Array(0), px: new Float32Array(0), py: new Float32Array(0), nx: new Float32Array(0), ny: new Float32Array(0),
@@ -349,8 +349,11 @@ function drawBody(m) {
   const img = ctx.createImageData(T, NU);
   for (let t = 0; t < T; t++) for (let u = 0; u < NU; u++) { const v = Math.tanh(st[t * NU + u]) * 0.5 + 0.5; const [r, g, b] = ramp(v, [[30, 60, 160], [12, 14, 20], [230, 120, 60]]);
     const o = (u * T + t) * 4; img.data[o] = r; img.data[o + 1] = g; img.data[o + 2] = b; img.data[o + 3] = 255; }
-  const off = new OffscreenCanvas ? new OffscreenCanvas(T, NU) : null;
-  if (off) { off.getContext('2d').putImageData(img, 0, 0); ctx.imageSmoothingEnabled = false; ctx.clearRect(0, 0, cv.width, cv.height); ctx.drawImage(off, 0, 0, cv.width, cv.height); }
+  let off = null;
+  if (typeof OffscreenCanvas !== 'undefined') off = new OffscreenCanvas(T, NU);
+  else { off = document.createElement('canvas'); off.width = T; off.height = NU; }
+  off.getContext('2d').putImageData(img, 0, 0); ctx.imageSmoothingEnabled = false; ctx.clearRect(0, 0, cv.width, cv.height);
+  ctx.drawImage(off, 0, 0, cv.width, cv.height);
   $('ins-title').textContent = `agente #${m.aid} · F${m.fidelity}${m.visual_twin ? ' · gêmeo visual' : ''}`;
   $('ins-title').title = m.note;
 }
